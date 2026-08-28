@@ -1,0 +1,19 @@
+{
+  "name": "earth-3d-globe",
+  "version": "1.0.0",
+  "description": "Google Earth-like 3D Globe with cities, landmarks, streets and terrain",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.22.2",
+    "node-fetch": "^2.7.0",
+    "pandas": "^0.0.3",
+    "satellite.js": "^7.0.1",
+    "sqlite3": "^6.0.1",
+    "ws": "^8.21.3"
+  }
+}
