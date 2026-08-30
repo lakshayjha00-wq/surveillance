@@ -410,3 +410,83 @@ httpServer.listen(PORT, () => {
   console.log(`📡 WebSocket Threat Relay at ws://localhost:${PORT}/ws/threats`);
   console.log(`✈️  WebSocket Flight Telemetry at ws://localhost:${PORT}/ws/flights\n`);
 });
+// ═══ NATIVE SPATIAL THREAT ENGINE (Replaces Shapely) ═══
+
+// 1. Spatial Math Engine (Ray-Casting)
+function isPointInPolygon(lat, lon, polygon) {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        let xi = polygon[i][1], yi = polygon[i][0]; 
+        let xj = polygon[j][1], yj = polygon[j][0];
+        
+        let intersect = ((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+    }
+    return inside;
+}
+
+// 2. Renamed to avoid conflicts!
+const ACTIVE_THREAT_POLYGONS = [
+    { id: 'P-1', name: 'Rashtrapati Bhavan Complex', polygon: [[28.6195, 77.1920], [28.6195, 77.2040], [28.6170, 77.2045], [28.6120, 77.2040], [28.6080, 77.2000], [28.6080, 77.1930], [28.6120, 77.1915], [28.6160, 77.1910]] },
+    { id: 'P-2', name: 'Parliament House Complex', polygon: [[28.6205, 77.2050], [28.6205, 77.2110], [28.6170, 77.2130], [28.6145, 77.2120], [28.6145, 77.2050], [28.6170, 77.2040]] },
+    { id: 'P-4', name: 'PMO / 7 Lok Kalyan Marg', polygon: [[28.6060, 77.1960], [28.6060, 77.2050], [28.6010, 77.2050], [28.5990, 77.2020], [28.5990, 77.1970], [28.6010, 77.1940], [28.6040, 77.1940]] },
+    { id: 'R-IGI', name: 'IGI Airport Restricted', polygon: [[28.5750, 77.0800], [28.5750, 77.1150], [28.5450, 77.1150], [28.5350, 77.0950], [28.5400, 77.0800]] },
+    { id: 'R-2', name: 'Pokhran Test Range', center: [26.73, 71.35], radius_km: 40 },
+    // THE TEMPORARY GHOST THREAT TEST ZONE
+    { id: 'TEST-1', name: 'DELHI MASSIVE TEST ZONE', center: [28.5561, 77.0999], radius_km: 100 }
+];
+
+// 3. Upgraded Broadcast Loop 
+setInterval(() => {
+    const state = flightFeed.getState();
+    const rawFlights = state.flights;
+    const activeThreats = [];
+
+    const processedFlights = rawFlights.map(f => {
+        if (f.lat == null || f.lon == null) return f;
+
+        let isThreat = false;
+        let threatZoneName = null;
+
+        for (const zone of ACTIVE_THREAT_POLYGONS) {
+            if (zone.polygon && isPointInPolygon(f.lat, f.lon, zone.polygon)) {
+                isThreat = true;
+                threatZoneName = zone.name;
+                break;
+            } else if (zone.center && zone.radius_km) {
+                const dist = haversineKm(f.lat, f.lon, zone.center[0], zone.center[1]);
+                if (dist <= zone.radius_km) {
+                    isThreat = true;
+                    threatZoneName = zone.name;
+                    break;
+                }
+            }
+        }
+
+        if (isThreat) {
+            activeThreats.push({ flight_id: f.id, zone: threatZoneName });
+            return { ...f, is_threat: true, threat_zone: threatZoneName };
+        }
+        return f;
+    });
+
+    const telemetryPayload = JSON.stringify({
+        type: 'telemetry_update', 
+        timestamp: state.timestamp || Date.now(),
+        count: processedFlights.length,
+        data: processedFlights
+    });
+
+    flightWsServer.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(telemetryPayload);
+            activeThreats.forEach(threat => {
+                client.send(JSON.stringify({
+                    type: 'threat_alert',
+                    flight_id: threat.flight_id,
+                    zone: threat.zone
+                }));
+            });
+        }
+    });
+}, 500);
