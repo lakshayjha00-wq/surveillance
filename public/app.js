@@ -20,7 +20,7 @@ const googleSatelliteImagery = new Cesium.UrlTemplateImageryProvider({
   enablePickFeatures: false,
 });
 
-// ─── Cesium Viewer — satellite imagery immediately; 3D upgraded by globe-3d.js ───
+// ─── Cesium Viewer ───
 const viewer = new Cesium.Viewer('cesiumContainer', {
   imageryProvider: googleSatelliteImagery,
   baseLayerPicker: false,
@@ -135,6 +135,70 @@ function setMapStyle(style) {
   }
 }
 
+// ─── TACTICAL SENSOR OPTICS (WEBGL SHADERS) ───
+const nightVisionFragmentShader = `
+    uniform sampler2D colorTexture;
+    in vec2 v_textureCoordinates;
+    out vec4 fragColor;
+    
+    float rand(vec2 co) {
+        return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    void main() {
+        vec4 color = texture(colorTexture, v_textureCoordinates);
+        float luminance = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+        float noise = (rand(v_textureCoordinates * 100.0) - 0.5) * 0.2;
+        float dist = distance(v_textureCoordinates, vec2(0.5, 0.5));
+        float vignette = smoothstep(0.8, 0.4, dist);
+        vec3 nvColor = vec3(0.1, 0.95, 0.2) * (luminance + noise) * vignette;
+        fragColor = vec4(nvColor, 1.0);
+    }
+`;
+
+const flirFragmentShader = `
+    uniform sampler2D colorTexture;
+    in vec2 v_textureCoordinates;
+    out vec4 fragColor;
+
+    void main() {
+        vec4 color = texture(colorTexture, v_textureCoordinates);
+        float luminance = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+        float thermal = 1.0 - luminance;
+        vec3 flirColor = vec3(smoothstep(0.2, 0.8, thermal));
+        fragColor = vec4(flirColor, 1.0);
+    }
+`;
+
+const nightVisionStage = new Cesium.PostProcessStage({ fragmentShader: nightVisionFragmentShader });
+const flirStage = new Cesium.PostProcessStage({ fragmentShader: flirFragmentShader });
+
+viewer.scene.postProcessStages.add(nightVisionStage);
+viewer.scene.postProcessStages.add(flirStage);
+
+nightVisionStage.enabled = false;
+flirStage.enabled = false;
+
+window.setOpticsMode = function(mode) {
+    nightVisionStage.enabled = (mode === 'NVG');
+    flirStage.enabled = (mode === 'FLIR');
+    viewer.scene.requestRender();
+    
+    const hudSceneStatus = document.getElementById('hudSceneStatus');
+    if (hudSceneStatus) {
+        hudSceneStatus.textContent = `OPTICS: ${mode === 'NORMAL' ? 'VISUAL' : mode}`;
+        hudSceneStatus.style.color = mode === 'NVG' ? '#22c55e' : (mode === 'FLIR' ? '#cbd5e1' : '#4ade80');
+    }
+};
+
+// Press 1 for Normal, 2 for Night Vision, 3 for FLIR Thermal
+document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return; 
+    if (e.key === '1') window.setOpticsMode('NORMAL');
+    if (e.key === '2') window.setOpticsMode('NVG');
+    if (e.key === '3') window.setOpticsMode('FLIR');
+});
+
 // ─── Search ───
 const searchInput = document.getElementById('searchInput');
 const searchResults = document.getElementById('searchResults');
@@ -227,7 +291,6 @@ function flyToResult(item) {
   });
 }
 
-// ─── Map Style Buttons ───
 document.querySelectorAll('.style-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('active'));
@@ -236,7 +299,6 @@ document.querySelectorAll('.style-btn').forEach(btn => {
   });
 });
 
-// ─── Layer Toggles (3D buildings/terrain wired in globe-3d.js when loaded) ───
 document.getElementById('toggleBuildings')?.addEventListener('change', (e) => {
   const ts = buildingsTileset || window.getBuildingsTileset?.();
   const p3d = window.getGlobe3DState?.()?.photorealisticTileset;
@@ -244,6 +306,7 @@ document.getElementById('toggleBuildings')?.addEventListener('change', (e) => {
   if (p3d) p3d.show = e.target.checked;
   viewer.scene.requestRender();
 });
+
 document.getElementById('toggleTerrain')?.addEventListener('change', (e) => {
   const mode = window.getGlobe3DState?.()?.mode;
   const on = e.target.checked;
@@ -256,13 +319,16 @@ document.getElementById('toggleTerrain')?.addEventListener('change', (e) => {
   }
   viewer.scene.requestRender();
 });
+
 document.getElementById('toggleAtmosphere').addEventListener('change', (e) => {
   viewer.scene.skyAtmosphere.show = e.target.checked;
   viewer.scene.globe.showGroundAtmosphere = e.target.checked;
 });
+
 document.getElementById('toggleDayNight').addEventListener('change', (e) => {
   viewer.scene.globe.enableLighting = e.target.checked;
 });
+
 document.getElementById('toggleGrid').addEventListener('change', (e) => {
   if (e.target.checked) {
     if (!viewer._gridImagery) {
@@ -277,7 +343,7 @@ document.getElementById('toggleGrid').addEventListener('change', (e) => {
   }
 });
 
-// ─── Restricted Airspaces (Tactical Zones) ───
+// ─── Restricted Airspaces ───
 const airspaceDataSource = new Cesium.CustomDataSource('airspaces');
 airspaceDataSource.show = false;
 viewer.dataSources.add(airspaceDataSource);
@@ -289,149 +355,43 @@ async function loadStrategicAirspaces() {
     
     data.zones.forEach(z => {
       const color = Cesium.Color.fromCssColorString(z.color);
-      
       if (z.polygon) {
         const degreesArray = z.polygon.flatMap(p => [p[1], p[0]]); 
         airspaceDataSource.entities.add({
-          id: z.id,
-          name: z.name,
+          id: z.id, name: z.name,
           polygon: {
             hierarchy: Cesium.Cartesian3.fromDegreesArray(degreesArray),
             material: color.withAlpha(0.15),
-            outline: true,
-            outlineColor: color.withAlpha(0.8),
-            outlineWidth: 2,
-            height: 0
+            outline: true, outlineColor: color.withAlpha(0.8), outlineWidth: 2, height: 0
           },
-          properties: {
-            isAirspace: true,
-            description: `Zone Type: ${z.type}`,
-            country: 'India',
-            radius: 'N/A'
-          }
+          properties: { isAirspace: true, description: `Zone Type: ${z.type}`, country: 'India', radius: 'N/A' }
         });
       } else if (z.polyline) {
         const degreesArray = z.polyline.flatMap(p => [p[1], p[0]]); 
         airspaceDataSource.entities.add({
-          id: z.id,
-          name: z.name,
+          id: z.id, name: z.name,
           polyline: {
-            positions: Cesium.Cartesian3.fromDegreesArray(degreesArray),
-            width: 4,
-            material: new Cesium.PolylineGlowMaterialProperty({
-              glowPower: 0.2,
-              color: color
-            })
+            positions: Cesium.Cartesian3.fromDegreesArray(degreesArray), width: 4,
+            material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.2, color })
           },
-          properties: {
-            isAirspace: true,
-            description: `Border/Line: ${z.type}`,
-            country: 'India',
-            radius: 'N/A'
-          }
+          properties: { isAirspace: true, description: `Border/Line: ${z.type}`, country: 'India', radius: 'N/A' }
         });
       } else if (z.center && z.radius_km) {
         airspaceDataSource.entities.add({
-          id: z.id,
-          name: z.name,
+          id: z.id, name: z.name,
           position: Cesium.Cartesian3.fromDegrees(z.center[1], z.center[0], 0), 
           ellipse: {
-            semiMinorAxis: z.radius_km * 1000,
-            semiMajorAxis: z.radius_km * 1000,
-            material: color.withAlpha(0.2),
-            outline: true,
-            outlineColor: color,
-            outlineWidth: 2,
-            height: 0,
-            extrudedHeight: 15000
+            semiMinorAxis: z.radius_km * 1000, semiMajorAxis: z.radius_km * 1000,
+            material: color.withAlpha(0.2), outline: true, outlineColor: color, outlineWidth: 2, height: 0, extrudedHeight: 15000
           },
-          properties: {
-            isAirspace: true,
-            description: `Zone Type: ${z.type}`,
-            country: 'India',
-            radius: z.radius_km * 1000
-          }
+          properties: { isAirspace: true, description: `Zone Type: ${z.type}`, country: 'India', radius: z.radius_km * 1000 }
         });
       }
     });
-  } catch (err) {
-    console.error('Failed to load airspaces:', err);
-  }
+  } catch (err) { console.error('Failed to load airspaces:', err); }
 }
-
 loadStrategicAirspaces();
 
-// ─── Global FIR Boundaries (Whole World) ───
-window.globalFirDataSource = null;
-
-Cesium.GeoJsonDataSource.load('https://gist.githubusercontent.com/LC43/5d6a009d83172d308a01a1c864b71e68/raw', {
-  stroke: Cesium.Color.CYAN.withAlpha(0.8),
-  fill: Cesium.Color.TRANSPARENT,
-  strokeWidth: 2
-}).then((dataSource) => {
-  window.globalFirDataSource = dataSource;
-  dataSource.name = "Global FIRs";
-  
-  const isChecked = document.getElementById('toggleAirspaces') ? document.getElementById('toggleAirspaces').checked : false;
-  dataSource.show = isChecked;
-  viewer.dataSources.add(dataSource);
-
-  const tacticalColors = [
-    Cesium.Color.fromCssColorString('#00FF41'),
-    Cesium.Color.fromCssColorString('#00D4FF'),
-    Cesium.Color.fromCssColorString('#FFB300'),
-    Cesium.Color.fromCssColorString('#CC44FF') 
-  ];
-
-  const entities = dataSource.entities.values;
-  for (let i = 0; i < entities.length; i++) {
-    const entity = entities[i];
-    const color = tacticalColors[i % tacticalColors.length];
-    
-    entity.properties.isAirspace = true;
-    entity.properties.description = `Global Flight Information Region (FIR)\nICAO: ${entity.properties.ICAO?.getValue() || 'N/A'}`;
-    entity.name = entity.properties.name?.getValue() || 'FIR BOUNDARY';
-
-    if (entity.polygon) {
-      const hierarchy = entity.polygon.hierarchy.getValue(Cesium.JulianDate.now());
-      if (hierarchy && hierarchy.positions) {
-        entity.polyline = new Cesium.PolylineGraphics({
-          positions: hierarchy.positions,
-          width: 2,
-          material: new Cesium.PolylineGlowMaterialProperty({
-            glowPower: 0.15,
-            color: color
-          })
-        });
-      }
-      entity.polygon = undefined; 
-    }
-  }
-
-  fetch('https://gist.githubusercontent.com/LC43/5d6a009d83172d308a01a1c864b71e68/raw')
-    .then(r => r.json())
-    .then(data => { window.rawGlobalFirs = data; });
-}).catch(err => console.error("Global FIRs failed to load:", err));
-
-const airspacesProvider = new Cesium.UrlTemplateImageryProvider({
-  url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Specialty/World_Navigation_Charts/MapServer/tile/{z}/{y}/{x}',
-  credit: 'Esri Navigation Charts',
-  maximumLevel: 10
-});
-const airspacesLayer = viewer.imageryLayers.addImageryProvider(airspacesProvider);
-airspacesLayer.show = false;
-airspacesLayer.alpha = 0.45;
-
-document.getElementById('toggleAirspaces').addEventListener('change', (e) => {
-  airspaceDataSource.show = e.target.checked;
-  airspacesLayer.show = e.target.checked;
-  if (window.globalFirDataSource) {
-    window.globalFirDataSource.show = e.target.checked;
-  }
-  viewer.scene.requestRender();
-});
-
-// ─── Side Panel Toggle ───
 const sidePanel = document.getElementById('sidePanel');
 document.getElementById('panelToggle').addEventListener('click', () => {
   sidePanel.classList.toggle('collapsed');
@@ -465,7 +425,7 @@ function updateHudTrack(flight = null) {
   hudSceneDetail.textContent = flight
     ? `${flight.isMilitary ? 'MILITARY' : 'CIVILIAN'} // ${flight.callsign || flight.id || 'UNKNOWN'}`
     : 'NO ACTIVE TRACK';
-  if(!flight) hudSceneStatus.style.color = ''; // Reset threat color
+  if (!flight) hudSceneStatus.style.color = '';
 }
 
 document.querySelectorAll('#sidePanel input[type="checkbox"]').forEach((input) => {
@@ -475,20 +435,6 @@ updateHudSensors();
 updateHudClock();
 updateHudTrack();
 setInterval(updateHudClock, 1000);
-
-// ─── Quick Fly-To ───
-document.querySelectorAll('.flyto-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const lat = parseFloat(btn.dataset.lat);
-    const lon = parseFloat(btn.dataset.lon);
-    const alt = parseFloat(btn.dataset.alt);
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(lon, lat, alt),
-      orientation: { heading: Cesium.Math.toRadians(10), pitch: Cesium.Math.toRadians(-35), roll: 0 },
-      duration: 3
-    });
-  });
-});
 
 // ─── Bottom Controls ───
 document.getElementById('btnZoomIn').addEventListener('click', () => {
@@ -505,25 +451,17 @@ document.getElementById('btnHome').addEventListener('click', () => {
   });
 });
 document.getElementById('btnNorth').addEventListener('click', () => {
-  viewer.camera.flyTo({
-    destination: viewer.camera.position,
-    orientation: { heading: 0, pitch: viewer.camera.pitch, roll: 0 },
-    duration: 1
-  });
+  viewer.camera.flyTo({ destination: viewer.camera.position, orientation: { heading: 0, pitch: viewer.camera.pitch, roll: 0 }, duration: 1 });
 });
 document.getElementById('btnTopDown').addEventListener('click', () => {
-  viewer.camera.flyTo({
-    destination: viewer.camera.position,
-    orientation: { heading: viewer.camera.heading, pitch: Cesium.Math.toRadians(-90), roll: 0 },
-    duration: 1
-  });
+  viewer.camera.flyTo({ destination: viewer.camera.position, orientation: { heading: viewer.camera.heading, pitch: Cesium.Math.toRadians(-90), roll: 0 }, duration: 1 });
 });
 document.getElementById('btnFullscreen').addEventListener('click', () => {
   if (!document.fullscreenElement) document.documentElement.requestFullscreen();
   else document.exitFullscreen();
 });
 
-// ─── Mouse coordinate tracking & Hover Tooltips ───
+// ─── Mouse Tracking & Tooltips ───
 const coordLat = document.getElementById('coordLat');
 const coordLon = document.getElementById('coordLon');
 const coordAlt = document.getElementById('coordAlt');
@@ -555,55 +493,12 @@ handler.setInputAction((movement) => {
   }
 
   const picked = viewer.scene.pick(movement.endPosition, 10, 10);
-  
-  const hoverSatId = window.getSatIdFromPick?.(picked);
-  if (hoverSatId && window.satTrackerData) {
-    const s = window.satTrackerData[hoverSatId];
-    if (s) {
-      const satColors = { MILITARY: '#ef4444', TELECOM: '#3b82f6', WEATHER: '#10b981', SCIENTIFIC: '#a855f7', SPACE_STATION: '#fcd34d', COMMERCIAL: '#38bdf8' };
-      const satIcons = { MILITARY: '⚔️', TELECOM: '📡', WEATHER: '🌤️', SCIENTIFIC: '🔬', SPACE_STATION: '🛰️', COMMERCIAL: '💎' };
-      const sc = satColors[s.type] || '#fbbf24';
-      const si = satIcons[s.type] || '🛰️';
-      hoverTooltip.innerHTML = `
-        <b style="font-size: 14px; color: ${sc};">${si} ${s.name}</b><br>
-        <div style="margin-top: 4px; color: #cbd5e1;">NORAD: #${s.norad_id} | Alt: ${s.alt_km} km</div>
-        <div style="margin-top: 6px; font-weight: 600; color: ${sc};">${s.type.replace('_', ' ')}</div>
-      `;
-      hoverTooltip.style.left = (movement.endPosition.x + 15) + 'px';
-      hoverTooltip.style.top = (movement.endPosition.y + 15) + 'px';
-      hoverTooltip.style.display = 'block';
-      return;
-    }
-  }
-
-  const hoverVesselId = window.getVesselIdFromPick?.(picked);
-  if (hoverVesselId) {
-    const v = window.getVesselById?.(hoverVesselId);
-    if (v) {
-      const mil = !!v.isMilitary;
-      const color = mil ? '#f87171' : '#38bdf8';
-      const label = mil ? '⚔ MILITARY VESSEL' : '🚢 COMMERCIAL VESSEL';
-      hoverTooltip.innerHTML = `
-        <b style="font-size: 14px; color: ${color};">🚢 ${v.name}</b><br>
-        <div style="margin-top: 4px; color: #cbd5e1;">${v.lat.toFixed(4)}°, ${v.lon.toFixed(4)}° · ${(v.sog || 0).toFixed(1)} kn</div>
-        <div style="margin-top: 6px; font-weight: 600; color: ${color};">${label}</div>
-      `;
-      hoverTooltip.style.left = (movement.endPosition.x + 15) + 'px';
-      hoverTooltip.style.top = (movement.endPosition.y + 15) + 'px';
-      hoverTooltip.style.display = 'block';
-      return;
-    }
-  }
-
   if (Cesium.defined(picked) && picked.primitive && picked.primitive.flightId) {
     const f = flightsById[picked.primitive.flightId];
     if (f) {
       let typeLabel = f.isMilitary ? "⚔️ TACTICAL MILITARY TARGET" : "✈️ COMMERCIAL FLIGHT";
       let color = f.isMilitary ? "#f87171" : "#4ade80";
-      if (f.is_threat) {
-        typeLabel = "🚨 CRITICAL THREAT 🚨";
-        color = "#ff0055";
-      }
+      if (f.is_threat) { typeLabel = "🚨 CRITICAL THREAT 🚨"; color = "#ff0055"; }
       hoverTooltip.innerHTML = `
         <b style="font-size: 14px; color: ${color};">${f.isMilitary ? '⚔️' : '✈️'} ${f.callsign}</b><br>
         <div style="margin-top: 4px; color: #cbd5e1;">Alt: ${Math.round(f.alt)}m | Spd: ${Math.round(f.velocity * 3.6)} km/h</div>
@@ -615,197 +510,36 @@ handler.setInputAction((movement) => {
       return;
     }
   }
-
-  if (Cesium.defined(picked) && picked.id && picked.id.properties && picked.id.properties.isAirspace) {
-    let typeLabel = "RESTRICTED AIRSPACE";
-    if (picked.id.properties.description.getValue().includes('FIR')) {
-      typeLabel = "STRATEGIC AIRSPACE ZONE";
-    }
-    hoverTooltip.innerHTML = `
-      <b style="font-size: 14px; color: #fff;">🛑 ${picked.id.name}</b><br>
-      <div style="margin-top: 4px; color: #cbd5e1;">${picked.id.properties.description.getValue()}</div>
-      <div style="margin-top: 6px; font-weight: 600; color: #ef4444;">${typeLabel}</div>
-    `;
-    hoverTooltip.style.left = (movement.endPosition.x + 15) + 'px';
-    hoverTooltip.style.top = (movement.endPosition.y + 15) + 'px';
-    hoverTooltip.style.display = 'block';
-  } else if (window.rawGlobalFirs && window.globalFirDataSource && window.globalFirDataSource.show) {
-    if (cart) {
-      const carto = Cesium.Cartographic.fromCartesian(cart);
-      const lat = Cesium.Math.toDegrees(carto.latitude);
-      const lon = Cesium.Math.toDegrees(carto.longitude);
-      
-      let foundFeature = null;
-      for (let f of window.rawGlobalFirs.features) {
-        const p = f.properties;
-        if (lat >= parseFloat(p.MinLat) && lat <= parseFloat(p.MaxLat) &&
-            lon >= parseFloat(p.MinLon) && lon <= parseFloat(p.MaxLon)) {
-            
-            let inside = false;
-            const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
-            for (let poly of polys) {
-              const ring = poly[0];
-              for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-                let xi = ring[i][0], yi = ring[i][1];
-                let xj = ring[j][0], yj = ring[j][1];
-                let intersect = ((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi);
-                if (intersect) inside = !inside;
-              }
-            }
-            if (inside) {
-              foundFeature = f;
-              break;
-            }
-        }
-      }
-      if (foundFeature) {
-        hoverTooltip.innerHTML = `
-          <b style="font-size: 14px; color: #fff;">🛑 ${foundFeature.properties.name || 'FIR BOUNDARY'}</b><br>
-          <div style="margin-top: 4px; color: #cbd5e1;">Global Flight Information Region (FIR)<br>ICAO: ${foundFeature.properties.ICAO || 'N/A'}</div>
-          <div style="margin-top: 6px; font-weight: 600; color: #ef4444;">STRATEGIC AIRSPACE ZONE</div>
-        `;
-        hoverTooltip.style.left = (movement.endPosition.x + 15) + 'px';
-        hoverTooltip.style.top = (movement.endPosition.y + 15) + 'px';
-        hoverTooltip.style.display = 'block';
-      } else {
-        hoverTooltip.style.display = 'none';
-      }
-    } else {
-      hoverTooltip.style.display = 'none';
-    }
-  } else {
-    hoverTooltip.style.display = 'none';
-  }
+  hoverTooltip.style.display = 'none';
 }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
-// ─── Flight Picking (Single Click) ───
 handler.setInputAction((click) => {
   const picked = viewer.scene.pick(click.position, 10, 10);
-  const clickVesselId = window.getVesselIdFromPick?.(picked);
-  if (clickVesselId && window.selectVessel) {
-    window.clearSatelliteSelection?.();
-    window.clearFlightSelection?.();
-    locationPopup.classList.add('hidden');
-    window.selectVessel(clickVesselId);
-    return;
-  }
-
   const clickFlightId = picked?.primitive?.flightId;
   if (clickFlightId && window.selectFlight) {
-    window.clearSatelliteSelection?.();
-    window.clearVesselSelection?.();
-    locationPopup.classList.add('hidden');
     window.selectFlight(clickFlightId);
-    return;
   } else {
-    const clickSatId = window.getSatIdFromPick?.(picked);
-    if (clickSatId && window.selectSatellite) {
-      locationPopup.classList.add('hidden');
-      window.clearFlightSelection?.();
-      window.clearVesselSelection?.();
-      window.selectSatellite(clickSatId);
-      return;
-    }
-    window.clearSatelliteSelection?.();
     window.clearFlightSelection?.();
-    window.clearVesselSelection?.();
   }
 }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-// ─── Click for reverse geocode ───
-const locationPopup = document.getElementById('locationPopup');
-handler.setInputAction(async (click) => {
-  window.clearSatelliteSelection?.();
-  window.clearFlightSelection?.();
-  const cart = viewer.camera.pickEllipsoid(click.position, viewer.scene.globe.ellipsoid);
-  if (!cart) return;
-  const carto = Cesium.Cartographic.fromCartesian(cart);
-  const lat = Cesium.Math.toDegrees(carto.latitude);
-  const lon = Cesium.Math.toDegrees(carto.longitude);
-
-  document.getElementById('popupTitle').textContent = 'Loading...';
-  document.getElementById('popupCoords').textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
-  document.getElementById('popupType').textContent = '—';
-  document.getElementById('popupAddress').textContent = '—';
-  locationPopup.classList.remove('hidden');
-
-  try {
-    const res = await fetch(`/api/reverse-geocode?lat=${lat}&lon=${lon}`);
-    const data = await res.json();
-    document.getElementById('popupTitle').textContent = data.display_name?.split(',')[0] || 'Unknown';
-    document.getElementById('popupType').textContent = data.type || data.addresstype || '—';
-    document.getElementById('popupAddress').textContent = data.display_name || '—';
-
-    document.getElementById('popupFlyTo').onclick = () => {
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(lon, lat, 500),
-        orientation: { heading: 0, pitch: Cesium.Math.toRadians(-45), roll: 0 },
-        duration: 2
-      });
-    };
-  } catch (e) { console.error(e); }
-}, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
-
-document.getElementById('popupClose').addEventListener('click', () => {
-  locationPopup.classList.add('hidden');
-});
-
-// ─── Camera Info Update ───
-const camLat = document.getElementById('camLat');
-const camLon = document.getElementById('camLon');
-const camAlt = document.getElementById('camAlt');
-const camHeading = document.getElementById('camHeading');
-const camPitch = document.getElementById('camPitch');
-
-viewer.camera.changed.addEventListener(() => updateCameraInfo());
-viewer.camera.moveEnd.addEventListener(() => updateCameraInfo());
-
-function updateCameraInfo() {
-  const pos = viewer.camera.positionCartographic;
-  camLat.textContent = Cesium.Math.toDegrees(pos.latitude).toFixed(4) + '°';
-  camLon.textContent = Cesium.Math.toDegrees(pos.longitude).toFixed(4) + '°';
-  const h = pos.height;
-  camAlt.textContent = h > 1000 ? (h / 1000).toFixed(1) + ' km' : h.toFixed(0) + ' m';
-  coordAlt.textContent = camAlt.textContent;
-  camHeading.textContent = Cesium.Math.toDegrees(viewer.camera.heading).toFixed(1) + '°';
-  camPitch.textContent = Cesium.Math.toDegrees(viewer.camera.pitch).toFixed(1) + '°';
-}
-updateCameraInfo();
-
-
-// ─── LIVE GLOBAL FLIGHTS (BILLBOARD AIRCRAFT ICONS) ───
-
-/** Cesium billboards need raster images — build a white plane PNG for color tinting */
+// ─── LIVE GLOBAL FLIGHTS & WEBSOCKET ENGINE ───
 function buildPlaneIconDataUrl() {
   const size = 64;
   const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
+  canvas.width = size; canvas.height = size;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, size, size);
   ctx.fillStyle = '#ffffff';
   ctx.strokeStyle = 'rgba(0,0,0,0.45)';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(32, 4);
-  ctx.lineTo(28, 24);
-  ctx.lineTo(12, 28);
-  ctx.lineTo(12, 32);
-  ctx.lineTo(26, 30);
-  ctx.lineTo(26, 44);
-  ctx.lineTo(20, 48);
-  ctx.lineTo(20, 52);
-  ctx.lineTo(32, 50);
-  ctx.lineTo(44, 52);
-  ctx.lineTo(44, 48);
-  ctx.lineTo(38, 44);
-  ctx.lineTo(38, 30);
-  ctx.lineTo(52, 32);
-  ctx.lineTo(52, 28);
-  ctx.lineTo(36, 24);
+  ctx.moveTo(32, 4); ctx.lineTo(28, 24); ctx.lineTo(12, 28); ctx.lineTo(12, 32);
+  ctx.lineTo(26, 30); ctx.lineTo(26, 44); ctx.lineTo(20, 48); ctx.lineTo(20, 52);
+  ctx.lineTo(32, 50); ctx.lineTo(44, 52); ctx.lineTo(44, 48); ctx.lineTo(38, 44);
+  ctx.lineTo(38, 30); ctx.lineTo(52, 32); ctx.lineTo(52, 28); ctx.lineTo(36, 24);
   ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
+  ctx.fill(); ctx.stroke();
   return canvas.toDataURL('image/png');
 }
 
@@ -815,7 +549,6 @@ const FLIGHT_SCALE_BY_DISTANCE = new Cesium.NearFarScalar(2e4, 1.4, 1.2e7, 0.55)
 const flightBillboards = viewer.scene.primitives.add(new Cesium.BillboardCollection());
 flightBillboards.show = false;
 
-// Socket & State Managers
 let flightSocket = null;
 const flightsById = {};
 const flightMarkers = {};
@@ -831,14 +564,10 @@ function setFlightRenderMode(enabled) {
   viewer.scene.requestRender();
 }
 
-function trackToBillboardRotation(trackDeg) {
-  return -Cesium.Math.toRadians(trackDeg || 0);
-}
-
 function flightBillboardOptions(f, position) {
   const isMil = !!f.isMilitary;
   let colorHex = isMil ? '#f87171' : '#4ade80';
-  if (f.is_threat) colorHex = '#ff0055'; // Override for threats
+  if (f.is_threat) colorHex = '#ff0055';
 
   return {
     image: PLANE_ICON,
@@ -846,7 +575,7 @@ function flightBillboardOptions(f, position) {
     width: isMil ? 32 : 26,
     height: isMil ? 32 : 26,
     scale: (isMil || f.is_threat) ? 1.1 : 1.0,
-    rotation: trackToBillboardRotation(f.track),
+    rotation: -Cesium.Math.toRadians(f.track || 0),
     color: Cesium.Color.fromCssColorString(colorHex),
     scaleByDistance: FLIGHT_SCALE_BY_DISTANCE,
     verticalOrigin: Cesium.VerticalOrigin.CENTER,
@@ -881,23 +610,6 @@ function computeFlightPath(f) {
   if (!positions.length) {
     positions.push(Cesium.Cartesian3.fromDegrees(f.lon, f.lat, f.alt || 10000));
   }
-
-  let lat = f.lat;
-  let lon = f.lon;
-  const altM = f.alt || 10000;
-  const trackRad = Cesium.Math.toRadians(f.track || 0);
-  const speedMs = f.velocity || 200;
-  const stepSec = 30;
-  const steps = f.isMilitary ? 100 : 50;
-
-  for (let i = 1; i <= steps; i++) {
-    const distM = speedMs * stepSec;
-    const dLat = (distM * Math.cos(trackRad)) / 111320;
-    const dLon = (distM * Math.sin(trackRad)) / (111320 * Math.cos(Cesium.Math.toRadians(lat)));
-    lat += dLat;
-    lon += dLon;
-    positions.push(Cesium.Cartesian3.fromDegrees(lon, lat, altM));
-  }
   return positions;
 }
 
@@ -906,38 +618,19 @@ function renderFlightPanel(f) {
   let color = isMil ? '#f87171' : '#4ade80';
   if (f.is_threat) color = '#ff0055';
 
-  const speedKmh = Math.round((f.velocity || 0) * 3.6);
-  const speedKts = Math.round((f.velocity || 0) * 1.94384);
-  const altFt = Math.round((f.alt || 0) * 3.28084);
-
   flightPopup.classList.toggle('military', isMil || f.is_threat);
   flightPopupTitle.textContent = isMil ? `⚔️ ${f.callsign}` : `✈️ ${f.callsign}`;
-  flightPopupBadge.textContent = f.is_threat ? '🚨 THREAT DETECTED' : (isMil ? 'Military (adsb.lol)' : 'Civilian ADS-B');
+  flightPopupBadge.textContent = f.is_threat ? '🚨 THREAT DETECTED' : (isMil ? 'Military' : 'Civilian ADS-B');
   flightPopupBadge.style.color = color;
-  flightPopupBadge.style.borderColor = color + '55';
-  flightPopupBadge.style.background = color + '22';
   flightPopupTitle.style.color = color;
 
   const rows = [
     ['Flight ID', f.id || '—'],
     ['Callsign', f.callsign || '—'],
-    ['Data Source', f.source || '—'],
     ['Latitude', f.lat != null ? `${f.lat.toFixed(4)}°` : '—'],
     ['Longitude', f.lon != null ? `${f.lon.toFixed(4)}°` : '—'],
-    ['Altitude', f.alt != null ? `${Math.round(f.alt)} m (${altFt} ft)` : '—'],
-    ['Ground Speed', `${speedKmh} km/h (${speedKts} kts)`],
-    ['Track / Heading', f.track != null ? `${Math.round(f.track)}°` : '—'],
-    ['Country / Route', f.country || '—'],
+    ['Altitude', f.alt != null ? `${Math.round(f.alt)} m` : '—'],
   ];
-
-  if (f.registration) rows.push(['Registration', f.registration]);
-  if (f.squawk) rows.push(['Squawk', f.squawk]);
-  if (f.category) rows.push(['Category', f.category]);
-
-  if (isMil) {
-    rows.push(['Aircraft Type', f.type || '—']);
-    rows.push(['Classification', 'MILITARY / ADSB.LOL']);
-  }
 
   flightPopupDetails.innerHTML = rows.map(([label, value]) => `
     <div class="popup-row"><span>${label}</span><span>${value}</span></div>
@@ -947,15 +640,9 @@ function renderFlightPanel(f) {
     if (f.lon == null || f.lat == null) return;
     viewer.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(f.lon, f.lat, (f.alt || 10000) + 8000),
-      orientation: {
-        heading: Cesium.Math.toRadians(f.track || 0),
-        pitch: Cesium.Math.toRadians(-35),
-        roll: 0
-      },
       duration: 2
     });
   };
-
   flightPopup.classList.remove('hidden');
 }
 
@@ -963,11 +650,6 @@ function clearFlightSelection() {
   if (selectedFlightPathEntity) {
     viewer.entities.remove(selectedFlightPathEntity);
     selectedFlightPathEntity = null;
-  }
-  if (highlightedFlightMarker && highlightedFlightScale != null) {
-    highlightedFlightMarker.scale = highlightedFlightScale;
-    highlightedFlightMarker = null;
-    highlightedFlightScale = null;
   }
   selectedFlightId = null;
   updateHudTrack();
@@ -978,58 +660,17 @@ function clearFlightSelection() {
 function selectFlight(flightId) {
   const f = flightsById[flightId];
   if (!f) return;
-
   clearFlightSelection();
   selectedFlightId = flightId;
   updateHudTrack(f);
-
-  let pathColor = f.isMilitary ? '#f87171' : '#4ade80';
-  if (f.is_threat) pathColor = '#ff0055';
-  
-  const pathPositions = computeFlightPath(f);
-
-  if (pathPositions.length > 1) {
-    selectedFlightPathEntity = viewer.entities.add({
-      polyline: {
-        positions: pathPositions,
-        width: 2.5,
-        material: new Cesium.PolylineGlowMaterialProperty({
-          glowPower: 0.15,
-          color: Cesium.Color.fromCssColorString(pathColor).withAlpha(0.9)
-        }),
-        arcType: Cesium.ArcType.GEODESIC
-      }
-    });
-
-    const sphere = Cesium.BoundingSphere.fromPoints(pathPositions);
-    viewer.camera.flyToBoundingSphere(sphere, {
-      duration: 2,
-      offset: new Cesium.HeadingPitchRange(
-        Cesium.Math.toRadians(f.track || 0),
-        Cesium.Math.toRadians(-40),
-        Math.max(sphere.radius * 2.5, 50000)
-      )
-    });
-  }
-
-  if (flightMarkers[flightId]) {
-    highlightedFlightMarker = flightMarkers[flightId];
-    highlightedFlightScale = highlightedFlightMarker.scale;
-    highlightedFlightMarker.scale = (highlightedFlightScale || 1) * 1.6;
-  }
-
   renderFlightPanel(f);
   viewer.scene.requestRender();
 }
 
 window.selectFlight = selectFlight;
 window.clearFlightSelection = clearFlightSelection;
-window.getFlightIdFromPick = (picked) => picked?.primitive?.flightId || null;
 
 document.getElementById('flightPopupClose')?.addEventListener('click', clearFlightSelection);
-
-
-// --- NEW WEBSOCKET LOGIC ---
 
 function processLiveFlights(flightsData) {
   const currentIds = new Set();
@@ -1039,15 +680,10 @@ function processLiveFlights(flightsData) {
   flightsData.forEach(f => {
     if (f.lat == null || f.lon == null) return;
     currentIds.add(f.id);
-    
-    // Preserve threat status if it already exists
-    if (flightsById[f.id] && flightsById[f.id].is_threat) {
-      f.is_threat = true;
-    }
+    if (flightsById[f.id] && flightsById[f.id].is_threat) f.is_threat = true;
 
     flightsById[f.id] = f;
     recordFlightPosition(f);
-    if (f.id === selectedFlightId) renderFlightPanel(f);
 
     const position = Cesium.Cartesian3.fromDegrees(f.lon, f.lat, Math.max(f.alt || 0, 100));
     const opts = flightBillboardOptions(f, position);
@@ -1058,7 +694,6 @@ function processLiveFlights(flightsData) {
       b.position = position;
       b.rotation = opts.rotation;
       b.color = opts.color;
-      if (f.id !== selectedFlightId) b.scale = opts.scale;
     } else {
       const billboard = flightBillboards.add(opts);
       billboard.flightId = f.id;
@@ -1066,69 +701,47 @@ function processLiveFlights(flightsData) {
     }
   });
 
-  // Cleanup dropped flights
   Object.keys(flightMarkers).forEach(id => {
     if (!currentIds.has(id)) {
       flightBillboards.remove(flightMarkers[id]);
       delete flightMarkers[id];
       delete flightsById[id];
-      delete flightHistory[id];
-      if (id === selectedFlightId) clearFlightSelection();
     }
   });
 
   if (viewer.scene.requestRenderMode) viewer.scene.requestRender();
 }
 
-function connectFastAPISocket() {
+function connectFlightSocket() {
   if (flightSocket) return;
-  // Connect to the Python FastAPI engine
-  flightSocket = new WebSocket('ws://localhost:8000/ws/telemetry');
+  // Connect to the Node.js WebSocket backend
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  flightSocket = new WebSocket(`${wsProtocol}//${window.location.host}/ws/flights`);
 
   flightSocket.onmessage = (event) => {
     const payload = JSON.parse(event.data);
-    
-    if (payload.type === 'telemetry_update') {
-      processLiveFlights(payload.data);
-    } 
-    // This catches the Shapely threat engine alerts!
-    else if (payload.type === 'threat_alert') {
-      triggerHudThreatWarning(payload.flight_id, payload.zone);
+    if (payload.flights) {
+      processLiveFlights(payload.flights);
     }
   };
 
-  flightSocket.onerror = () => {
-    console.error('[Socket] FastAPI Engine disconnected.');
-    const statusEl = document.getElementById('flightFeedStatus');
-    if (statusEl) statusEl.textContent = '⚠ SOCKET ERROR';
-  };
-  
-  flightSocket.onclose = () => {
-    flightSocket = null;
-  }
+  flightSocket.onerror = () => { console.error('[Socket] Flight stream error.'); };
+  flightSocket.onclose = () => { flightSocket = null; };
 }
 
 function triggerHudThreatWarning(flightId, zoneName) {
   const f = flightsById[flightId];
   if (!f) return;
-  
-  // Turn the plane icon bright magenta/red
   f.is_threat = true; 
   if (flightMarkers[flightId]) {
     flightMarkers[flightId].color = Cesium.Color.fromCssColorString('#ff0055');
     flightMarkers[flightId].scale = 1.8;
   }
-
-  // Update HUD text
   if (hudSceneStatus && hudSceneDetail) {
     hudSceneStatus.textContent = 'CRITICAL: ZONE BREACH';
     hudSceneStatus.style.color = '#ff0055';
     hudSceneDetail.textContent = `TARGET ${f.callsign || flightId} ENTERED ${zoneName}`;
   }
-  
-  // Update popup if currently selected
-  if (selectedFlightId === flightId) renderFlightPanel(f);
-  
   viewer.scene.requestRender();
 }
 
@@ -1136,32 +749,18 @@ document.getElementById('toggleFlights').addEventListener('change', (e) => {
   const on = e.target.checked;
   flightBillboards.show = on;
   setFlightRenderMode(on);
-  
-  const sourceContainer = document.getElementById('flightSourceContainer');
-  if (sourceContainer) sourceContainer.style.display = on ? 'flex' : 'none';
 
   if (on) {
-    connectFastAPISocket();
+    connectFlightSocket();
   } else {
-    if (flightSocket) {
-      flightSocket.close();
-      flightSocket = null;
-    }
+    if (flightSocket) { flightSocket.close(); flightSocket = null; }
     clearFlightSelection();
     Object.keys(flightMarkers).forEach((id) => {
       flightBillboards.remove(flightMarkers[id]);
       delete flightMarkers[id];
-      delete flightsById[id];
-      delete flightHistory[id];
     });
-    const statusEl = document.getElementById('flightFeedStatus');
-    if (statusEl) statusEl.textContent = 'OFFLINE';
   }
   viewer.scene.requestRender();
 });
 
-
-// ─── SATELLITE TRACKING & XYZ GRID ───
-// Handled by satellite-tracker.js module (loaded after app.js)
-
-console.log('🌍 Earth 3D Globe initialized successfully');
+console.log('🌍 Earth 3D Globe initialized successfully with Tactical Optics');
