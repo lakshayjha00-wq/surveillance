@@ -44,8 +44,8 @@ window.viewer = viewer;
 const imageryLayers = viewer.imageryLayers;
 
 // Performance tweaks for globe
-viewer.scene.globe.maximumScreenSpaceError = 3; // Load slightly lower detail tiles first for faster loading
-viewer.scene.globe.tileCacheSize = 1000; // Keep more tiles in memory to prevent reloading
+viewer.scene.globe.maximumScreenSpaceError = 3; 
+viewer.scene.globe.tileCacheSize = 1000; 
 
 viewer.scene.globe.show = true;
 viewer.scene.globe.enableLighting = false;
@@ -256,27 +256,6 @@ document.getElementById('toggleTerrain')?.addEventListener('change', (e) => {
   }
   viewer.scene.requestRender();
 });
-// 3D Exaggeration slider removed (no UI element)
-// const exaggerationSlider = document.getElementById('exaggerationSlider');
-// const exaggerationValue = document.getElementById('exaggerationValue');
-// if (exaggerationSlider) {
-//   exaggerationSlider.addEventListener('input', () => {
-//     const factor = parseFloat(exaggerationSlider.value);
-//     exaggerationValue.textContent = factor.toFixed(1) + '×';
-//     viewer.scene.globe.terrainExaggeration = factor;
-//     const p3d = window.getGlobe3DState?.()?.photorealisticTileset;
-//     if (p3d) {
-//       const scaleMatrix = Cesium.Matrix4.fromScale(new Cesium.Cartesian3(factor, factor, factor));
-//       p3d.root.transform = scaleMatrix;
-//     }
-//     const bTileset = window.getBuildingsTileset?.();
-//     if (bTileset) {
-//       const scaleMatrix = Cesium.Matrix4.fromScale(new Cesium.Cartesian3(factor, factor, factor));
-//       bTileset.root.transform = scaleMatrix;
-//     }
-//     viewer.scene.requestRender();
-//   });
-// }
 document.getElementById('toggleAtmosphere').addEventListener('change', (e) => {
   viewer.scene.skyAtmosphere.show = e.target.checked;
   viewer.scene.globe.showGroundAtmosphere = e.target.checked;
@@ -297,6 +276,7 @@ document.getElementById('toggleGrid').addEventListener('change', (e) => {
     viewer._gridImagery = null;
   }
 });
+
 // ─── Restricted Airspaces (Tactical Zones) ───
 const airspaceDataSource = new Cesium.CustomDataSource('airspaces');
 airspaceDataSource.show = false;
@@ -311,8 +291,7 @@ async function loadStrategicAirspaces() {
       const color = Cesium.Color.fromCssColorString(z.color);
       
       if (z.polygon) {
-        // Convert [[lat, lon], ...] to Cartesian3 array
-        const degreesArray = z.polygon.flatMap(p => [p[1], p[0]]); // lon, lat
+        const degreesArray = z.polygon.flatMap(p => [p[1], p[0]]); 
         airspaceDataSource.entities.add({
           id: z.id,
           name: z.name,
@@ -323,7 +302,6 @@ async function loadStrategicAirspaces() {
             outlineColor: color.withAlpha(0.8),
             outlineWidth: 2,
             height: 0
-            // Removed extrudedHeight to prevent computeWallGeometry crash on complex FIR boundaries
           },
           properties: {
             isAirspace: true,
@@ -333,7 +311,7 @@ async function loadStrategicAirspaces() {
           }
         });
       } else if (z.polyline) {
-        const degreesArray = z.polyline.flatMap(p => [p[1], p[0]]); // lon, lat
+        const degreesArray = z.polyline.flatMap(p => [p[1], p[0]]); 
         airspaceDataSource.entities.add({
           id: z.id,
           name: z.name,
@@ -356,7 +334,7 @@ async function loadStrategicAirspaces() {
         airspaceDataSource.entities.add({
           id: z.id,
           name: z.name,
-          position: Cesium.Cartesian3.fromDegrees(z.center[1], z.center[0], 0), // lon, lat
+          position: Cesium.Cartesian3.fromDegrees(z.center[1], z.center[0], 0), 
           ellipse: {
             semiMinorAxis: z.radius_km * 1000,
             semiMajorAxis: z.radius_km * 1000,
@@ -394,17 +372,15 @@ Cesium.GeoJsonDataSource.load('https://gist.githubusercontent.com/LC43/5d6a009d8
   window.globalFirDataSource = dataSource;
   dataSource.name = "Global FIRs";
   
-  // Sync initial state
   const isChecked = document.getElementById('toggleAirspaces') ? document.getElementById('toggleAirspaces').checked : false;
   dataSource.show = isChecked;
   viewer.dataSources.add(dataSource);
 
-  // Tactical colors used in Indian FIRs (Delhi, Mumbai, Chennai, Kolkata)
   const tacticalColors = [
-    Cesium.Color.fromCssColorString('#00FF41'), // Green
-    Cesium.Color.fromCssColorString('#00D4FF'), // Cyan
-    Cesium.Color.fromCssColorString('#FFB300'), // Amber
-    Cesium.Color.fromCssColorString('#CC44FF')  // Purple
+    Cesium.Color.fromCssColorString('#00FF41'),
+    Cesium.Color.fromCssColorString('#00D4FF'),
+    Cesium.Color.fromCssColorString('#FFB300'),
+    Cesium.Color.fromCssColorString('#CC44FF') 
   ];
 
   const entities = dataSource.entities.values;
@@ -412,14 +388,11 @@ Cesium.GeoJsonDataSource.load('https://gist.githubusercontent.com/LC43/5d6a009d8
     const entity = entities[i];
     const color = tacticalColors[i % tacticalColors.length];
     
-    // Set custom tactical properties for tooltip
     entity.properties.isAirspace = true;
     entity.properties.description = `Global Flight Information Region (FIR)\nICAO: ${entity.properties.ICAO?.getValue() || 'N/A'}`;
     entity.name = entity.properties.name?.getValue() || 'FIR BOUNDARY';
 
     if (entity.polygon) {
-      // DESTROY polygon geometry completely. It's too complex and crashes Cesium at the dateline.
-      // We will handle picking purely mathematically using raw JS.
       const hierarchy = entity.polygon.hierarchy.getValue(Cesium.JulianDate.now());
       if (hierarchy && hierarchy.positions) {
         entity.polyline = new Cesium.PolylineGraphics({
@@ -435,16 +408,11 @@ Cesium.GeoJsonDataSource.load('https://gist.githubusercontent.com/LC43/5d6a009d8
     }
   }
 
-  // Pre-fetch raw GeoJSON for mathematical point-in-polygon picking (zero WebGL crashes)
   fetch('https://gist.githubusercontent.com/LC43/5d6a009d83172d308a01a1c864b71e68/raw')
     .then(r => r.json())
     .then(data => { window.rawGlobalFirs = data; });
-
-  console.log('Global FIRs loaded successfully.');
-  console.log('Global FIRs loaded successfully.');
 }).catch(err => console.error("Global FIRs failed to load:", err));
 
-// ─── Normal Airspaces Overlay (Global) ───
 const airspacesProvider = new Cesium.UrlTemplateImageryProvider({
   url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Specialty/World_Navigation_Charts/MapServer/tile/{z}/{y}/{x}',
   credit: 'Esri Navigation Charts',
@@ -452,7 +420,7 @@ const airspacesProvider = new Cesium.UrlTemplateImageryProvider({
 });
 const airspacesLayer = viewer.imageryLayers.addImageryProvider(airspacesProvider);
 airspacesLayer.show = false;
-airspacesLayer.alpha = 0.45; // Semi-transparent so satellite shows through
+airspacesLayer.alpha = 0.45;
 
 document.getElementById('toggleAirspaces').addEventListener('change', (e) => {
   airspaceDataSource.show = e.target.checked;
@@ -497,6 +465,7 @@ function updateHudTrack(flight = null) {
   hudSceneDetail.textContent = flight
     ? `${flight.isMilitary ? 'MILITARY' : 'CIVILIAN'} // ${flight.callsign || flight.id || 'UNKNOWN'}`
     : 'NO ACTIVE TRACK';
+  if(!flight) hudSceneStatus.style.color = ''; // Reset threat color
 }
 
 document.querySelectorAll('#sidePanel input[type="checkbox"]').forEach((input) => {
@@ -575,7 +544,6 @@ document.body.appendChild(hoverTooltip);
 
 const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 handler.setInputAction((movement) => {
-  // 1. Update Coordinates
   const cart = viewer.camera.pickEllipsoid(movement.endPosition, viewer.scene.globe.ellipsoid);
   if (cart) {
     const carto = Cesium.Cartographic.fromCartesian(cart);
@@ -586,7 +554,6 @@ handler.setInputAction((movement) => {
     hudCoordinates.textContent = `LAT ${lat} / LON ${lon}`;
   }
 
-  // 2. Hover Tooltip
   const picked = viewer.scene.pick(movement.endPosition, 10, 10);
   
   const hoverSatId = window.getSatIdFromPick?.(picked);
@@ -631,8 +598,12 @@ handler.setInputAction((movement) => {
   if (Cesium.defined(picked) && picked.primitive && picked.primitive.flightId) {
     const f = flightsById[picked.primitive.flightId];
     if (f) {
-      const typeLabel = f.isMilitary ? "⚔️ TACTICAL MILITARY TARGET" : "✈️ COMMERCIAL FLIGHT";
-      const color = f.isMilitary ? "#f87171" : "#4ade80";
+      let typeLabel = f.isMilitary ? "⚔️ TACTICAL MILITARY TARGET" : "✈️ COMMERCIAL FLIGHT";
+      let color = f.isMilitary ? "#f87171" : "#4ade80";
+      if (f.is_threat) {
+        typeLabel = "🚨 CRITICAL THREAT 🚨";
+        color = "#ff0055";
+      }
       hoverTooltip.innerHTML = `
         <b style="font-size: 14px; color: ${color};">${f.isMilitary ? '⚔️' : '✈️'} ${f.callsign}</b><br>
         <div style="margin-top: 4px; color: #cbd5e1;">Alt: ${Math.round(f.alt)}m | Spd: ${Math.round(f.velocity * 3.6)} km/h</div>
@@ -650,7 +621,6 @@ handler.setInputAction((movement) => {
     if (picked.id.properties.description.getValue().includes('FIR')) {
       typeLabel = "STRATEGIC AIRSPACE ZONE";
     }
-
     hoverTooltip.innerHTML = `
       <b style="font-size: 14px; color: #fff;">🛑 ${picked.id.name}</b><br>
       <div style="margin-top: 4px; color: #cbd5e1;">${picked.id.properties.description.getValue()}</div>
@@ -660,7 +630,6 @@ handler.setInputAction((movement) => {
     hoverTooltip.style.top = (movement.endPosition.y + 15) + 'px';
     hoverTooltip.style.display = 'block';
   } else if (window.rawGlobalFirs && window.globalFirDataSource && window.globalFirDataSource.show) {
-    // Math-based picking for Global FIRs to avoid WebGL polygons
     if (cart) {
       const carto = Cesium.Cartographic.fromCartesian(cart);
       const lat = Cesium.Math.toDegrees(carto.latitude);
@@ -672,11 +641,10 @@ handler.setInputAction((movement) => {
         if (lat >= parseFloat(p.MinLat) && lat <= parseFloat(p.MaxLat) &&
             lon >= parseFloat(p.MinLon) && lon <= parseFloat(p.MaxLon)) {
             
-            // Check Point in Polygon
             let inside = false;
             const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
             for (let poly of polys) {
-              const ring = poly[0]; // outer ring
+              const ring = poly[0];
               for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
                 let xi = ring[i][0], yi = ring[i][1];
                 let xj = ring[j][0], yj = ring[j][1];
@@ -690,7 +658,6 @@ handler.setInputAction((movement) => {
             }
         }
       }
-
       if (foundFeature) {
         hoverTooltip.innerHTML = `
           <b style="font-size: 14px; color: #fff;">🛑 ${foundFeature.properties.name || 'FIR BOUNDARY'}</b><br>
@@ -806,9 +773,7 @@ function updateCameraInfo() {
 updateCameraInfo();
 
 
-
 // ─── LIVE GLOBAL FLIGHTS (BILLBOARD AIRCRAFT ICONS) ───
-const FLIGHT_POLL_MS = 1500;
 
 /** Cesium billboards need raster images — build a white plane PNG for color tinting */
 function buildPlaneIconDataUrl() {
@@ -850,8 +815,8 @@ const FLIGHT_SCALE_BY_DISTANCE = new Cesium.NearFarScalar(2e4, 1.4, 1.2e7, 0.55)
 const flightBillboards = viewer.scene.primitives.add(new Cesium.BillboardCollection());
 flightBillboards.show = false;
 
-let flightInterval = null;
-let flightFetchBusy = false;
+// Socket & State Managers
+let flightSocket = null;
 const flightsById = {};
 const flightMarkers = {};
 const flightHistory = {};
@@ -872,14 +837,17 @@ function trackToBillboardRotation(trackDeg) {
 
 function flightBillboardOptions(f, position) {
   const isMil = !!f.isMilitary;
+  let colorHex = isMil ? '#f87171' : '#4ade80';
+  if (f.is_threat) colorHex = '#ff0055'; // Override for threats
+
   return {
     image: PLANE_ICON,
     position,
     width: isMil ? 32 : 26,
     height: isMil ? 32 : 26,
-    scale: isMil ? 1.1 : 1.0,
+    scale: (isMil || f.is_threat) ? 1.1 : 1.0,
     rotation: trackToBillboardRotation(f.track),
-    color: Cesium.Color.fromCssColorString(isMil ? '#f87171' : '#4ade80'),
+    color: Cesium.Color.fromCssColorString(colorHex),
     scaleByDistance: FLIGHT_SCALE_BY_DISTANCE,
     verticalOrigin: Cesium.VerticalOrigin.CENTER,
     horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
@@ -935,14 +903,16 @@ function computeFlightPath(f) {
 
 function renderFlightPanel(f) {
   const isMil = !!f.isMilitary;
-  const color = isMil ? '#f87171' : '#4ade80';
+  let color = isMil ? '#f87171' : '#4ade80';
+  if (f.is_threat) color = '#ff0055';
+
   const speedKmh = Math.round((f.velocity || 0) * 3.6);
   const speedKts = Math.round((f.velocity || 0) * 1.94384);
   const altFt = Math.round((f.alt || 0) * 3.28084);
 
-  flightPopup.classList.toggle('military', isMil);
+  flightPopup.classList.toggle('military', isMil || f.is_threat);
   flightPopupTitle.textContent = isMil ? `⚔️ ${f.callsign}` : `✈️ ${f.callsign}`;
-  flightPopupBadge.textContent = isMil ? 'Military (adsb.lol)' : 'Civilian ADS-B';
+  flightPopupBadge.textContent = f.is_threat ? '🚨 THREAT DETECTED' : (isMil ? 'Military (adsb.lol)' : 'Civilian ADS-B');
   flightPopupBadge.style.color = color;
   flightPopupBadge.style.borderColor = color + '55';
   flightPopupBadge.style.background = color + '22';
@@ -1013,7 +983,9 @@ function selectFlight(flightId) {
   selectedFlightId = flightId;
   updateHudTrack(f);
 
-  const pathColor = f.isMilitary ? '#f87171' : '#4ade80';
+  let pathColor = f.isMilitary ? '#f87171' : '#4ade80';
+  if (f.is_threat) pathColor = '#ff0055';
+  
   const pathPositions = computeFlightPath(f);
 
   if (pathPositions.length > 1) {
@@ -1056,118 +1028,138 @@ window.getFlightIdFromPick = (picked) => picked?.primitive?.flightId || null;
 
 document.getElementById('flightPopupClose')?.addEventListener('click', clearFlightSelection);
 
-async function fetchAndRenderFlights() {
-  if (!document.getElementById('toggleFlights').checked || flightFetchBusy) return;
-  flightFetchBusy = true;
-  try {
-    const source = document.getElementById('flightSource')?.value || 'auto';
-    const res = await fetch(`/api/flights?source=${source}&_=${Date.now()}`);
-    const data = await res.json();
-    if (!data.flights) return;
 
-    const statusEl = document.getElementById('flightFeedStatus');
-    if (statusEl) {
-      statusEl.textContent = data.error
-        ? '⚠ feed error'
-        : `${data.count} · ${data.civilian || 0}c/${data.military || 0}m`;
-    }
+// --- NEW WEBSOCKET LOGIC ---
 
-    const currentIds = new Set();
+function processLiveFlights(flightsData) {
+  const currentIds = new Set();
+  const statusEl = document.getElementById('flightFeedStatus');
+  if (statusEl) statusEl.textContent = `${flightsData.length} LIVE TRACKS 🟢`;
 
-    data.flights.forEach(f => {
-      if (f.lat == null || f.lon == null) return;
-      currentIds.add(f.id);
-      flightsById[f.id] = f;
-      recordFlightPosition(f);
-      if (f.id === selectedFlightId) renderFlightPanel(f);
-
-      const position = Cesium.Cartesian3.fromDegrees(f.lon, f.lat, Math.max(f.alt || 0, 100));
-      const opts = flightBillboardOptions(f, position);
-
-      if (flightMarkers[f.id]) {
-        const b = flightMarkers[f.id];
-        b.show = true;
-        b.position = position;
-        b.rotation = opts.rotation;
-        b.color = opts.color;
-        if (f.id !== selectedFlightId) b.scale = opts.scale;
-      } else {
-        const billboard = flightBillboards.add(opts);
-        billboard.flightId = f.id;
-        flightMarkers[f.id] = billboard;
-      }
-    });
-
-    Object.keys(flightMarkers).forEach(id => {
-      if (!currentIds.has(id)) {
-        flightBillboards.remove(flightMarkers[id]);
-        delete flightMarkers[id];
-        delete flightsById[id];
-        delete flightHistory[id];
-        if (id === selectedFlightId) clearFlightSelection();
-      }
-    });
-
-    if (selectedFlightId && flightsById[selectedFlightId]) {
-      const sel = flightsById[selectedFlightId];
-      if (selectedFlightPathEntity) {
-        viewer.entities.remove(selectedFlightPathEntity);
-      }
-      const pathPositions = computeFlightPath(sel);
-      if (pathPositions.length > 1) {
-        const pathColor = sel.isMilitary ? '#f87171' : '#4ade80';
-        selectedFlightPathEntity = viewer.entities.add({
-          polyline: {
-            positions: pathPositions,
-            width: 2.5,
-            material: new Cesium.PolylineGlowMaterialProperty({
-              glowPower: 0.15,
-              color: Cesium.Color.fromCssColorString(pathColor).withAlpha(0.9)
-            }),
-            arcType: Cesium.ArcType.GEODESIC
-          }
-        });
-      }
-    }
+  flightsData.forEach(f => {
+    if (f.lat == null || f.lon == null) return;
+    currentIds.add(f.id);
     
-    if (!viewer.scene.requestRenderMode) {
-      // continuous 60fps loop — no-op
-    } else {
-      viewer.scene.requestRender();
+    // Preserve threat status if it already exists
+    if (flightsById[f.id] && flightsById[f.id].is_threat) {
+      f.is_threat = true;
     }
-  } catch (err) {
-    console.error('Failed to update flights:', err);
-  } finally {
-    flightFetchBusy = false;
+
+    flightsById[f.id] = f;
+    recordFlightPosition(f);
+    if (f.id === selectedFlightId) renderFlightPanel(f);
+
+    const position = Cesium.Cartesian3.fromDegrees(f.lon, f.lat, Math.max(f.alt || 0, 100));
+    const opts = flightBillboardOptions(f, position);
+
+    if (flightMarkers[f.id]) {
+      const b = flightMarkers[f.id];
+      b.show = true;
+      b.position = position;
+      b.rotation = opts.rotation;
+      b.color = opts.color;
+      if (f.id !== selectedFlightId) b.scale = opts.scale;
+    } else {
+      const billboard = flightBillboards.add(opts);
+      billboard.flightId = f.id;
+      flightMarkers[f.id] = billboard;
+    }
+  });
+
+  // Cleanup dropped flights
+  Object.keys(flightMarkers).forEach(id => {
+    if (!currentIds.has(id)) {
+      flightBillboards.remove(flightMarkers[id]);
+      delete flightMarkers[id];
+      delete flightsById[id];
+      delete flightHistory[id];
+      if (id === selectedFlightId) clearFlightSelection();
+    }
+  });
+
+  if (viewer.scene.requestRenderMode) viewer.scene.requestRender();
+}
+
+function connectFastAPISocket() {
+  if (flightSocket) return;
+  // Connect to the Python FastAPI engine
+  flightSocket = new WebSocket('ws://localhost:8000/ws/telemetry');
+
+  flightSocket.onmessage = (event) => {
+    const payload = JSON.parse(event.data);
+    
+    if (payload.type === 'telemetry_update') {
+      processLiveFlights(payload.data);
+    } 
+    // This catches the Shapely threat engine alerts!
+    else if (payload.type === 'threat_alert') {
+      triggerHudThreatWarning(payload.flight_id, payload.zone);
+    }
+  };
+
+  flightSocket.onerror = () => {
+    console.error('[Socket] FastAPI Engine disconnected.');
+    const statusEl = document.getElementById('flightFeedStatus');
+    if (statusEl) statusEl.textContent = '⚠ SOCKET ERROR';
+  };
+  
+  flightSocket.onclose = () => {
+    flightSocket = null;
   }
+}
+
+function triggerHudThreatWarning(flightId, zoneName) {
+  const f = flightsById[flightId];
+  if (!f) return;
+  
+  // Turn the plane icon bright magenta/red
+  f.is_threat = true; 
+  if (flightMarkers[flightId]) {
+    flightMarkers[flightId].color = Cesium.Color.fromCssColorString('#ff0055');
+    flightMarkers[flightId].scale = 1.8;
+  }
+
+  // Update HUD text
+  if (hudSceneStatus && hudSceneDetail) {
+    hudSceneStatus.textContent = 'CRITICAL: ZONE BREACH';
+    hudSceneStatus.style.color = '#ff0055';
+    hudSceneDetail.textContent = `TARGET ${f.callsign || flightId} ENTERED ${zoneName}`;
+  }
+  
+  // Update popup if currently selected
+  if (selectedFlightId === flightId) renderFlightPanel(f);
+  
+  viewer.scene.requestRender();
 }
 
 document.getElementById('toggleFlights').addEventListener('change', (e) => {
   const on = e.target.checked;
   flightBillboards.show = on;
   setFlightRenderMode(on);
+  
   const sourceContainer = document.getElementById('flightSourceContainer');
-  if (sourceContainer) {
-    sourceContainer.style.display = on ? 'flex' : 'none';
-  }
+  if (sourceContainer) sourceContainer.style.display = on ? 'flex' : 'none';
 
   if (on) {
-    fetchAndRenderFlights();
-    flightInterval = setInterval(fetchAndRenderFlights, FLIGHT_POLL_MS);
+    connectFastAPISocket();
   } else {
-    clearInterval(flightInterval);
+    if (flightSocket) {
+      flightSocket.close();
+      flightSocket = null;
+    }
     clearFlightSelection();
     Object.keys(flightMarkers).forEach((id) => {
       flightBillboards.remove(flightMarkers[id]);
       delete flightMarkers[id];
+      delete flightsById[id];
+      delete flightHistory[id];
     });
+    const statusEl = document.getElementById('flightFeedStatus');
+    if (statusEl) statusEl.textContent = 'OFFLINE';
   }
   viewer.scene.requestRender();
 });
 
-document.getElementById('flightSource')?.addEventListener('change', () => {
-  fetchAndRenderFlights();
-});
 
 // ─── SATELLITE TRACKING & XYZ GRID ───
 // Handled by satellite-tracker.js module (loaded after app.js)
