@@ -372,6 +372,7 @@
         </header>
         <p class="intel-card-meta">${z.radius_km} km ops radius · ${z.center.lat.toFixed(2)}°, ${z.center.lon.toFixed(2)}°</p>
         <p class="intel-card-desc">${z.intel_summary || z.description || ''}</p>
+        <button class="kg-btn" onclick="openKnowledgeGraph('${z.id}', '${z.name}', event)" style="margin-top: 8px; background: #2563eb; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px;">View Data Graph</button>
       </article>`;
     });
 
