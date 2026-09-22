@@ -152,10 +152,10 @@ async function fetchCivilian(source, fetchWithTimeout, fetch, log) {
   if (source === 'fr24') return fetchFR24(fetch);
   if (source === 'opensky') return fetchOpenSky(fetchWithTimeout, log);
   try {
-    return await fetchFR24(fetch);
+    return await fetchOpenSky(fetchWithTimeout, log);
   } catch {
-    log('FR24 unavailable, falling back to OpenSky...', 'FLIGHTS');
-    return fetchOpenSky(fetchWithTimeout, log);
+    log('OpenSky unavailable, falling back to FR24...', 'FLIGHTS');
+    return await fetchFR24(fetch);
   }
 }
 

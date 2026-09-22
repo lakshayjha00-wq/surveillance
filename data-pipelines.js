@@ -1,8 +1,10 @@
 const { db } = require('./satellite-db');
 const { getCrisisZones } = require('./lib/crisis-zones');
 
-// Sample mock data pools
-const NEWS_HEADLINES = [
+const fetch = require('node-fetch');
+
+// Sample mock data pools (used as fallback)
+const FALLBACK_HEADLINES = [
     "Border Tensions Escalate Near Sector Alpha",
     "Unidentified Aircraft Spotted Entering Restricted Airspace",
     "Local Supply Chains Disrupted by Roadblocks",
@@ -13,6 +15,41 @@ const NEWS_HEADLINES = [
 
 const WEATHER_CONDITIONS = ["Clear", "Heavy Rain", "Dense Fog", "Sandstorm", "Thunderstorm", "Snowstorm"];
 const TRAFFIC_STATUS = ["Flowing", "Moderate Congestion", "Heavy Congestion", "Roadblock", "Military Checkpoint"];
+
+const RSS_FEEDS = [
+    { source: 'BBC', url: 'http://feeds.bbci.co.uk/news/world/rss.xml' },
+    { source: 'NYT', url: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml' },
+    { source: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml' },
+    { source: 'CNN', url: 'http://rss.cnn.com/rss/edition_world.rss' }
+];
+
+async function fetchLiveNews() {
+    const feed = getRandom(RSS_FEEDS);
+    try {
+        const response = await fetch(feed.url, { timeout: 8000 });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const xml = await response.text();
+        
+        // Simple regex to extract <title> tags (ignoring the first one which is usually the channel title)
+        const titleRegex = /<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/g;
+        let match;
+        const titles = [];
+        while ((match = titleRegex.exec(xml)) !== null) {
+            if (match[1] && !match[1].includes('CNN.com') && !match[1].includes('NYT >') && !match[1].includes('BBC News')) {
+                titles.push(match[1].trim());
+            }
+        }
+        
+        if (titles.length > 0) {
+            return { headline: getRandom(titles), source: feed.source };
+        }
+    } catch (e) {
+        console.error(`[PIPELINES] Failed to fetch news from ${feed.source}:`, e.message);
+    }
+    
+    // Fallback
+    return { headline: getRandom(FALLBACK_HEADLINES), source: 'Unknown (Fallback)' };
+}
 
 function initPipelinesSchema() {
     return new Promise((resolve, reject) => {
@@ -60,7 +97,9 @@ async function simulateDataForZone(zone) {
     const zId = zone.id;
 
     const newsId = `NEWS-${zId}-${now}`;
-    const headline = getRandom(NEWS_HEADLINES);
+    const liveNews = await fetchLiveNews();
+    const headline = liveNews.headline;
+    const newsSource = liveNews.source;
     
     const weatherId = `WTH-${zId}-${now}`;
     const condition = getRandom(WEATHER_CONDITIONS);
@@ -75,7 +114,7 @@ async function simulateDataForZone(zone) {
     return new Promise((resolve) => {
         db.serialize(() => {
             db.run("INSERT INTO news_articles (id, zone_id, headline, source, timestamp, lat, lon) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [newsId, zId, headline, "Reuters Mock", now, jitter(lat), jitter(lon)]);
+                [newsId, zId, headline, newsSource, now, jitter(lat), jitter(lon)]);
             
             db.run("INSERT INTO weather_reports (id, zone_id, condition, visibility_km, temp_c, timestamp, lat, lon) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [weatherId, zId, condition, Math.random() * 10, Math.random() * 40, now, jitter(lat), jitter(lon)]);
