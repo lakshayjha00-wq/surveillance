@@ -28,10 +28,7 @@ class WsThreatRelay {
     this._clients = new Set();
     this._heartbeatTimer = null;
 
-    this._wss = new WebSocketServer({
-      server: httpServer,
-      path: this._path,
-    });
+    this._wss = new WebSocketServer({ noServer: true });
 
     this._wss.on('connection', (ws, req) => this._onConnection(ws, req));
     this._wss.on('error', (err) => {
@@ -100,6 +97,12 @@ class WsThreatRelay {
   }
 
   /* ───────── Public API ───────── */
+
+  handleUpgrade(req, socket, head) {
+    this._wss.handleUpgrade(req, socket, head, (ws) => {
+      this._wss.emit('connection', ws, req);
+    });
+  }
 
   /**
    * Broadcast a JSON-serializable payload to every connected client.
