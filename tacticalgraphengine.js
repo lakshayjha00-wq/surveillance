@@ -118,4 +118,73 @@ function executeDb(sql, params = []) {
   });
 }
 
-module.exports = { initIntelSchema, evaluateEntityCrossCorrelation };
+/**
+ * Extracts the current Knowledge Graph state for a specific zone
+ * Connecting News, Weather, Traffic, Conflicts, and calculating probabilities.
+ */
+async function extractKnowledgeGraph(zoneId) {
+  const nodes = [];
+  const edges = [];
+  
+  // Central Event Node (The Zone itself or a Tactical Alert)
+  nodes.push({ id: `ZONE-${zoneId}`, label: `Crisis Zone\n${zoneId}`, group: 'zone', value: 20 });
+  
+  // Fetch latest data from pipelines
+  const news = await queryDb("SELECT * FROM news_articles WHERE zone_id = ? ORDER BY timestamp DESC LIMIT 3", [zoneId]);
+  const weather = await queryDb("SELECT * FROM weather_reports WHERE zone_id = ? ORDER BY timestamp DESC LIMIT 1", [zoneId]);
+  const traffic = await queryDb("SELECT * FROM traffic_incidents WHERE zone_id = ? ORDER BY timestamp DESC LIMIT 3", [zoneId]);
+  const conflict = await queryDb("SELECT * FROM conflict_assessments WHERE zone_id = ? ORDER BY timestamp DESC LIMIT 1", [zoneId]);
+  
+  // Add News Nodes
+  news.forEach(n => {
+    nodes.push({ id: n.id, label: `NEWS: ${n.headline.substring(0, 20)}...`, group: 'news', title: n.headline });
+    edges.push({ from: n.id, to: `ZONE-${zoneId}`, label: 'reports on' });
+  });
+  
+  // Add Weather
+  let badWeather = false;
+  weather.forEach(w => {
+    nodes.push({ id: w.id, label: `WEATHER: ${w.condition}\nVis: ${Math.round(w.visibility_km)}km`, group: 'weather' });
+    edges.push({ from: w.id, to: `ZONE-${zoneId}`, label: 'affects' });
+    if (w.condition !== 'Clear') badWeather = true;
+  });
+  
+  // Add Traffic
+  let blockedTraffic = false;
+  traffic.forEach(t => {
+    nodes.push({ id: t.id, label: `TRAFFIC: ${t.status}\n${t.road_name}`, group: 'traffic' });
+    edges.push({ from: t.id, to: `ZONE-${zoneId}`, label: 'impacts' });
+    if (t.status.includes('Block') || t.status.includes('Military')) blockedTraffic = true;
+  });
+  
+  // Add Conflict
+  let highRisk = false;
+  conflict.forEach(c => {
+    nodes.push({ id: c.id, label: `INTEL: Risk ${c.risk_level}`, group: 'intel' });
+    edges.push({ from: c.id, to: `ZONE-${zoneId}`, label: 'assesses' });
+    if (c.risk_level === 'HIGH' || c.risk_level === 'CRITICAL') highRisk = true;
+  });
+  
+  // CALCULATE PROBABILITY CONSEQUENCES
+  if (badWeather && blockedTraffic) {
+    const outcomeId = `OUTCOME-1-${zoneId}`;
+    nodes.push({ id: outcomeId, label: 'OUTCOME:\nSupply Line\nDisruption', group: 'outcome', value: 15, color: '#ff9900' });
+    edges.push({ from: `ZONE-${zoneId}`, to: outcomeId, label: 'Probability: 85%' });
+  }
+  
+  if (highRisk && blockedTraffic) {
+    const outcomeId = `OUTCOME-2-${zoneId}`;
+    nodes.push({ id: outcomeId, label: 'OUTCOME:\nImminent\nEscalation', group: 'outcome', value: 15, color: '#ff4444' });
+    edges.push({ from: `ZONE-${zoneId}`, to: outcomeId, label: 'Probability: 72%' });
+  }
+
+  if (badWeather && highRisk) {
+    const outcomeId = `OUTCOME-3-${zoneId}`;
+    nodes.push({ id: outcomeId, label: 'OUTCOME:\nLimited Air\nSupport', group: 'outcome', value: 15, color: '#ff9900' });
+    edges.push({ from: `ZONE-${zoneId}`, to: outcomeId, label: 'Probability: 90%' });
+  }
+
+  return { nodes, edges };
+}
+
+module.exports = { initIntelSchema, evaluateEntityCrossCorrelation, extractKnowledgeGraph };

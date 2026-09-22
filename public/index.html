@@ -15,6 +15,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="styles.css">
+  
+  <!-- Vis Network for Knowledge Graph -->
+  <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head>
 <body>
 
@@ -360,6 +363,15 @@
     <button class="popup-action" id="popupFlyTo">🎯 Fly Here</button>
   </div>
 
+  <!-- Knowledge Graph Modal -->
+  <div id="knowledgeGraphModal" class="hidden" style="position: fixed; top: 10%; left: 10%; width: 80%; height: 80%; background: #0f172a; z-index: 10000; border: 1px solid #334155; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.8); display: flex; flex-direction: column;">
+    <div style="padding: 10px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; background: #1e293b;">
+      <h3 style="margin: 0; color: #f8fafc; font-size: 16px;">Intelligence Graph Matrix <span id="kgZoneName" style="color:#38bdf8;"></span></h3>
+      <button id="kgCloseBtn" style="background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer;">✕</button>
+    </div>
+    <div id="knowledgeGraphContainer" style="flex: 1; position: relative;"></div>
+  </div>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/satellite.js/5.0.0/satellite.min.js"></script>
   <script src="globe-3d.js?v=2"></script>
   <script src="app.js?v=12"></script>
@@ -368,5 +380,6 @@
   <script src="satellite-tracker.js?v=3"></script>
   <script src="satcam-tracker.js?v=1"></script>
   <script src="traffic-tracker.js?v=1"></script>
+  <script src="data-graph.js?v=1"></script>
 </body>
 </html>

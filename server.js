@@ -24,6 +24,8 @@ const { haversineKm } = require('./lib/haversine');
 const { WsThreatRelay } = require('./ws-threat-relay');
 const { getCesiumIonToken } = require('./lib/cesium-config');
 const { resolveOsmLayer, buildTileUrl, UA } = require('./lib/osm-tiles');
+const { initPipelinesSchema, startPipelineGenerator } = require('./data-pipelines');
+const { extractKnowledgeGraph } = require('./tacticalgraphengine');
 
 const log = (msg, category = 'SYSTEM') => console.log(`[${category}] ${msg}`);
 
@@ -55,6 +57,11 @@ satDb.initDB().then(async () => {
   // Initialize the Entity Tracking schema inside the shared DB instance
   log('Initializing Intelligence Tracking Matrix Schema...', 'INTEL');
   await initIntelSchema();
+  
+  // Initialize multi-pipeline schema and background generators
+  log('Initializing Multi-Pipeline Ingestion Schema...', 'PIPELINES');
+  await initPipelinesSchema();
+  startPipelineGenerator();
 
   // Initialize and start NASA FIRMS Active Fire Background Service
   log('Initializing NASA FIRMS Active Fire Surveillance Background Service...', 'FIRMS');
@@ -93,6 +100,22 @@ app.get('/api/tactical-alerts', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to extract system alerts' });
+  }
+});
+
+// Knowledge Graph API Endpoint
+app.get('/api/knowledge-graph/:zoneId', async (req, res) => {
+  try {
+    const zoneId = req.params.zoneId;
+    const graphData = await extractKnowledgeGraph(zoneId);
+    res.json({
+      success: true,
+      ...graphData,
+      timestamp: Date.now()
+    });
+  } catch (err) {
+    console.error('Failed to extract knowledge graph:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
