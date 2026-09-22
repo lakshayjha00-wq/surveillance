@@ -377,13 +377,31 @@ app.get('/api/massive-tle', async (req, res) => {
 });
 
 // ═══ NEW: HIGH-FREQUENCY FLIGHT TELEMETRY STREAM ═══
-const flightWsServer = new WebSocket.Server({ server: httpServer, path: '/ws/flights' });
+const flightWsServer = new WebSocket.Server({ noServer: true });
 
 flightWsServer.on('connection', (ws) => {
     log('Radar client connected to High-Frequency Flight Stream', 'WS-FLIGHTS');
     ws.on('close', () => {
         log('Radar client disconnected from Flight Stream', 'WS-FLIGHTS');
     });
+});
+
+httpServer.on('upgrade', (req, socket, head) => {
+    const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+
+    if (pathname === '/ws/threats') {
+      wsRelay.handleUpgrade(req, socket, head);
+      return;
+    }
+
+    if (pathname === '/ws/flights') {
+      flightWsServer.handleUpgrade(req, socket, head, (ws) => {
+        flightWsServer.emit('connection', ws, req);
+      });
+      return;
+    }
+
+    socket.destroy();
 });
 
 // The broadcast loop runs 2 times a second (500ms). 
