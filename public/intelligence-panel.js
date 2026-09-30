@@ -37,7 +37,6 @@
       outlineColor: Cesium.Color.BLACK,
       outlineWidth: 2,
       verticalOrigin: Cesium.VerticalOrigin.CENTER,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY,
     };
     const style = labelStyleFillOutline();
     if (style !== undefined) label.style = style;
@@ -251,14 +250,12 @@
           color,
           outlineColor: Cesium.Color.WHITE,
           outlineWidth: 2,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         label: {
           text: '🔥',
           font: '14px sans-serif',
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
           pixelOffset: new Cesium.Cartesian2(0, -12),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
           distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2500000),
         },
         description:
@@ -308,7 +305,6 @@
           color: Cesium.Color.fromCssColorString('#ffea00'),
           outlineColor: Cesium.Color.RED,
           outlineWidth: 3,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         ellipse: {
           semiMajorAxis: zone.radius_km * KM_TO_M * 0.15,

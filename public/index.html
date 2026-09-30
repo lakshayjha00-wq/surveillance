@@ -231,6 +231,16 @@
           <input type="checkbox" id="toggleTacticalMap" checked>
           <span class="toggle-switch"></span>
         </label>
+        <label class="toggle-row" style="color: #4fc3f7; font-weight: 600;">
+          <span>CCTV Cameras 📷</span>
+          <input type="checkbox" id="toggleCctvCameras">
+          <span class="toggle-switch"></span>
+        </label>
+        <label class="toggle-row" style="color: #ef5350; font-weight: 600;">
+          <span>Cyber Attacks ⚡</span>
+          <input type="checkbox" id="toggleCyberAttacks">
+          <span class="toggle-switch"></span>
+        </label>
       </div>
 
       <!-- Quick Fly-To -->
@@ -289,6 +299,8 @@
         <button type="button" class="intel-tab" data-tab="thermal" role="tab">Thermal</button>
         <button type="button" class="intel-tab" data-tab="traffic" role="tab">Traffic</button>
         <button type="button" class="intel-tab" data-tab="satcams" role="tab">Sat Cams</button>
+        <button type="button" class="intel-tab" data-tab="cctv" role="tab">CCTV</button>
+        <button type="button" class="intel-tab" data-tab="cyber" role="tab">Cyber</button>
       </nav>
     </header>
     <div class="intel-panels">
@@ -297,6 +309,8 @@
       <div id="intel-panel-thermal" class="intel-panel-pane" role="tabpanel"></div>
       <div id="intel-panel-traffic" class="intel-panel-pane" role="tabpanel"></div>
       <div id="intel-panel-satcams" class="intel-panel-pane" role="tabpanel"></div>
+      <div id="intel-panel-cctv" class="intel-panel-pane" role="tabpanel"></div>
+      <div id="intel-panel-cyber" class="intel-panel-pane" role="tabpanel"></div>
     </div>
   </aside>
 
@@ -381,5 +395,6 @@
   <script src="satcam-tracker.js?v=1"></script>
   <script src="traffic-tracker.js?v=1"></script>
   <script src="data-graph.js?v=1"></script>
+  <script src="osiris-layers.js?v=1"></script>
 </body>
 </html>

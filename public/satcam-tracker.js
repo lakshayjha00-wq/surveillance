@@ -266,7 +266,6 @@
         billboard: {
           image: ISS_ICON_SVG,
           scale: 0.8,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY
         },
         path: {
           resolution: 2,
