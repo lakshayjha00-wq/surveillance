@@ -85,7 +85,7 @@
   async function applyWorldTerrain(viewer) {
     if (!Cesium.Ion.defaultAccessToken) {
       viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
-      viewer.scene.globe.depthTestAgainstTerrain = false;
+      viewer.scene.globe.depthTestAgainstTerrain = true;
       return false;
     }
     try {
@@ -112,7 +112,7 @@
     } catch (err) {
       console.warn('[GLOBE] Terrain unavailable:', err.message);
       viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
-      viewer.scene.globe.depthTestAgainstTerrain = false;
+      viewer.scene.globe.depthTestAgainstTerrain = true;
       return false;
     }
   }

@@ -380,7 +380,6 @@
               color: color,
               outlineColor: Cesium.Color.WHITE,
               outlineWidth: 1.5,
-              disableDepthTestDistance: Number.POSITIVE_INFINITY
             }
           });
         }
@@ -420,7 +419,6 @@
                   color: patrolColor,
                   outlineColor: Cesium.Color.WHITE,
                   outlineWidth: 2,
-                  disableDepthTestDistance: Number.POSITIVE_INFINITY
                 },
                 label: {
                   text: '🚔 PATROL',
@@ -430,7 +428,6 @@
                   outlineColor: Cesium.Color.BLACK,
                   outlineWidth: 2,
                   pixelOffset: new Cesium.Cartesian2(0, -14),
-                  disableDepthTestDistance: Number.POSITIVE_INFINITY
                 }
               });
             } else {

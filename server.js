@@ -26,6 +26,7 @@ const { getCesiumIonToken } = require('./lib/cesium-config');
 const { resolveOsmLayer, buildTileUrl, UA } = require('./lib/osm-tiles');
 const { initPipelinesSchema, startPipelineGenerator } = require('./data-pipelines');
 const { extractKnowledgeGraph } = require('./tacticalgraphengine');
+const { getCCTVCameras, getCyberThreats, getCyberAttacks } = require('./lib/osiris-feeds');
 
 const log = (msg, category = 'SYSTEM') => console.log(`[${category}] ${msg}`);
 
@@ -368,6 +369,38 @@ app.get('/api/crisis-zones', (req, res) => {
     count: CrisisZoneAnalyzer.getZones().length,
     timestamp: Date.now(),
   });
+});
+
+// ═══ NEW: OSIRIS INTELLIGENCE FEEDS ═══
+
+app.get('/api/cctv', async (req, res) => {
+  try {
+    const cameras = await getCCTVCameras();
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json({ cameras, total: cameras.length, timestamp: Date.now() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch CCTV cameras', cameras: [] });
+  }
+});
+
+app.get('/api/cyber-attacks', async (req, res) => {
+  try {
+    const data = await getCyberAttacks();
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch cyber attacks' });
+  }
+});
+
+app.get('/api/cyber-threats', async (req, res) => {
+  try {
+    const data = await getCyberThreats();
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch cyber threats' });
+  }
 });
 
 // --- SATELLITE TRACKING ---

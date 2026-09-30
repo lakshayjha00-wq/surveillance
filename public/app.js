@@ -49,7 +49,7 @@ viewer.scene.globe.tileCacheSize = 1000;
 
 viewer.scene.globe.show = true;
 viewer.scene.globe.enableLighting = false;
-viewer.scene.globe.depthTestAgainstTerrain = false;
+viewer.scene.globe.depthTestAgainstTerrain = true;
 viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0b132b');
 viewer.scene.fog.enabled = true;
 viewer.scene.fog.density = 0.0002;
