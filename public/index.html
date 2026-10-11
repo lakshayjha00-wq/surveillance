@@ -18,6 +18,9 @@
   
   <!-- Vis Network for Knowledge Graph -->
   <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  
+  <!-- HLS.js for Live Streaming (m3u8) -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 </head>
 <body>
 
@@ -166,6 +169,7 @@
         </label>
         <label class="toggle-row" style="color: #4ade80; font-weight: 600;">
           <span>Live Flights ✈️</span>
+          <span class="layer-badge" id="flightsCount">--</span>
           <input type="checkbox" id="toggleFlights">
           <span class="toggle-switch"></span>
         </label>
@@ -180,6 +184,7 @@
         </div>
         <label class="toggle-row" style="color: #38bdf8; font-weight: 600;">
           <span>Live Maritime 🚢</span>
+          <span class="layer-badge" id="vesselsCount">--</span>
           <input type="checkbox" id="toggleMaritime">
           <span class="toggle-switch"></span>
         </label>
@@ -198,6 +203,7 @@
         </label>
         <label class="toggle-row" style="color: #fbbf24; font-weight: 600;">
           <span>Live Satellites 🛰️</span>
+          <span class="layer-badge" id="satellitesCount">--</span>
           <input type="checkbox" id="toggleSatellites">
           <span class="toggle-switch"></span>
         </label>
@@ -233,12 +239,26 @@
         </label>
         <label class="toggle-row" style="color: #4fc3f7; font-weight: 600;">
           <span>CCTV Cameras 📷</span>
+          <span class="layer-badge" id="cctvCount">--</span>
           <input type="checkbox" id="toggleCctvCameras">
           <span class="toggle-switch"></span>
         </label>
         <label class="toggle-row" style="color: #ef5350; font-weight: 600;">
           <span>Cyber Attacks ⚡</span>
+          <span class="layer-badge" id="cyberCount">--</span>
           <input type="checkbox" id="toggleCyberAttacks">
+          <span class="toggle-switch"></span>
+        </label>
+        <label class="toggle-row" style="color: #f59e0b; font-weight: 600;">
+          <span>Earthquakes 🌋</span>
+          <span class="layer-badge" id="earthquakesCount">--</span>
+          <input type="checkbox" id="toggleEarthquakes">
+          <span class="toggle-switch"></span>
+        </label>
+        <label class="toggle-row" style="color: #06b6d4; font-weight: 600;">
+          <span>Severe Weather 🌀</span>
+          <span class="layer-badge" id="weatherCount">--</span>
+          <input type="checkbox" id="toggleWeatherEvents">
           <span class="toggle-switch"></span>
         </label>
       </div>
@@ -294,25 +314,81 @@
     <header class="intel-dock-header">
       <h2 class="intel-dock-title">Intelligence</h2>
       <nav class="intel-tabs" role="tablist">
-        <button type="button" class="intel-tab active" data-tab="crisis" role="tab">Crisis Zones</button>
+        <button type="button" class="intel-tab active" data-tab="crisis" role="tab">Crisis</button>
         <button type="button" class="intel-tab" data-tab="tactical" role="tab">Tactical</button>
         <button type="button" class="intel-tab" data-tab="thermal" role="tab">Thermal</button>
+        <button type="button" class="intel-tab" data-tab="earthquakes" role="tab">Quakes</button>
+        <button type="button" class="intel-tab" data-tab="weather" role="tab">Weather</button>
+        <button type="button" class="intel-tab" data-tab="space-weather" role="tab">☀️ Space</button>
+        <button type="button" class="intel-tab" data-tab="gdelt" role="tab">GDELT</button>
         <button type="button" class="intel-tab" data-tab="traffic" role="tab">Traffic</button>
         <button type="button" class="intel-tab" data-tab="satcams" role="tab">Sat Cams</button>
         <button type="button" class="intel-tab" data-tab="cctv" role="tab">CCTV</button>
         <button type="button" class="intel-tab" data-tab="cyber" role="tab">Cyber</button>
+        <button type="button" class="intel-tab" data-tab="news" role="tab">News</button>
+        <button type="button" class="intel-tab" data-tab="sanctions" role="tab">Sanctions</button>
+        <button type="button" class="intel-tab" data-tab="malware" role="tab">Malware</button>
       </nav>
     </header>
     <div class="intel-panels">
       <div id="intel-panel-crisis" class="intel-panel-pane active" role="tabpanel"></div>
       <div id="intel-panel-tactical" class="intel-panel-pane" role="tabpanel"></div>
       <div id="intel-panel-thermal" class="intel-panel-pane" role="tabpanel"></div>
+      <div id="intel-panel-earthquakes" class="intel-panel-pane" role="tabpanel"></div>
+      <div id="intel-panel-weather" class="intel-panel-pane" role="tabpanel"></div>
+      <div id="intel-panel-space-weather" class="intel-panel-pane" role="tabpanel"></div>
+      <div id="intel-panel-gdelt" class="intel-panel-pane" role="tabpanel"></div>
       <div id="intel-panel-traffic" class="intel-panel-pane" role="tabpanel"></div>
       <div id="intel-panel-satcams" class="intel-panel-pane" role="tabpanel"></div>
       <div id="intel-panel-cctv" class="intel-panel-pane" role="tabpanel"></div>
       <div id="intel-panel-cyber" class="intel-panel-pane" role="tabpanel"></div>
+      <div id="intel-panel-news" class="intel-panel-pane" role="tabpanel"></div>
+      <div id="intel-panel-sanctions" class="intel-panel-pane" role="tabpanel"></div>
+      <div id="intel-panel-malware" class="intel-panel-pane" role="tabpanel"></div>
     </div>
   </aside>
+
+  <!-- ═══ CCTV CAMERA VIEWER MODAL ═══ -->
+  <div id="cctvModal" style="display:none; position:fixed; inset:0; z-index:20000; background:rgba(0,0,0,0.92); backdrop-filter:blur(8px); align-items:center; justify-content:center; flex-direction:column;">
+    <div style="width:min(860px,96vw); background:#050c1a; border:1px solid #1e3a5f; border-radius:12px; box-shadow:0 0 60px rgba(0,180,255,0.15); overflow:hidden; display:flex; flex-direction:column;">
+      <!-- Header -->
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 18px; background:linear-gradient(90deg,#0a1628,#0d2040); border-bottom:1px solid #1e3a5f;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="color:#ef4444; font-size:11px; font-family:monospace; font-weight:700; animation:pulse 1.5s infinite;">● LIVE</span>
+          <span id="cctvModalName" style="color:#e2e8f0; font-family:monospace; font-size:13px; font-weight:600;">—</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <span id="cctvModalMeta" style="color:#64748b; font-family:monospace; font-size:11px;"></span>
+          <button id="cctvModalClose" style="background:rgba(255,255,255,0.08); border:none; color:#94a3b8; width:28px; height:28px; border-radius:6px; cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; transition:all 0.2s;">✕</button>
+        </div>
+      </div>
+      <!-- Feed Container -->
+      <div id="cctvFeedContainer" style="position:relative; width:100%; background:#020810; aspect-ratio:16/9; display:flex; align-items:center; justify-content:center;">
+        <!-- Scan line overlay -->
+        <div style="position:absolute; inset:0; background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,229,255,0.03) 3px,rgba(0,229,255,0.03) 4px); pointer-events:none; z-index:2;"></div>
+        <!-- Corner brackets -->
+        <div style="position:absolute; top:12px; left:12px; width:24px; height:24px; border-top:2px solid #00e5ff; border-left:2px solid #00e5ff; opacity:0.6; z-index:3;"></div>
+        <div style="position:absolute; top:12px; right:12px; width:24px; height:24px; border-top:2px solid #00e5ff; border-right:2px solid #00e5ff; opacity:0.6; z-index:3;"></div>
+        <div style="position:absolute; bottom:12px; left:12px; width:24px; height:24px; border-bottom:2px solid #00e5ff; border-left:2px solid #00e5ff; opacity:0.6; z-index:3;"></div>
+        <div style="position:absolute; bottom:12px; right:12px; width:24px; height:24px; border-bottom:2px solid #00e5ff; border-right:2px solid #00e5ff; opacity:0.6; z-index:3;"></div>
+        <!-- Timestamp overlay -->
+        <div id="cctvTimestamp" style="position:absolute; bottom:16px; left:18px; font-family:monospace; font-size:11px; color:#38bdf8; z-index:4; opacity:0.8;"></div>
+        <!-- Feed source label -->
+        <div id="cctvSourceLabel" style="position:absolute; top:16px; right:18px; font-family:monospace; font-size:10px; color:#22c55e; z-index:4; opacity:0.8;"></div>
+        <!-- Actual feed rendered here -->
+        <div id="cctvFeedInner" style="position:absolute; inset:0; z-index:1; display:flex; align-items:center; justify-content:center;"></div>
+      </div>
+      <!-- Footer bar -->
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 18px; background:#030c1a; border-top:1px solid #1e3a5f; gap:12px;">
+        <div style="display:flex; gap:8px;">
+          <button id="cctvModalPrev" style="background:rgba(255,255,255,0.06); border:1px solid #1e3a5f; color:#94a3b8; padding:5px 14px; border-radius:6px; cursor:pointer; font-size:12px; font-family:monospace; transition:all 0.2s;">◀ PREV</button>
+          <button id="cctvModalNext" style="background:rgba(255,255,255,0.06); border:1px solid #1e3a5f; color:#94a3b8; padding:5px 14px; border-radius:6px; cursor:pointer; font-size:12px; font-family:monospace; transition:all 0.2s;">NEXT ▶</button>
+        </div>
+        <span id="cctvModalCounter" style="font-family:monospace; font-size:11px; color:#475569;">CAM — / —</span>
+        <button id="cctvModalFlyTo" style="background:rgba(0,229,255,0.1); border:1px solid #0ea5e9; color:#38bdf8; padding:5px 14px; border-radius:6px; cursor:pointer; font-size:12px; font-family:monospace; transition:all 0.2s;">🎯 FLY TO LOCATION</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Bottom Controls -->
   <div id="bottomControls">
@@ -395,6 +471,6 @@
   <script src="satcam-tracker.js?v=1"></script>
   <script src="traffic-tracker.js?v=1"></script>
   <script src="data-graph.js?v=1"></script>
-  <script src="osiris-layers.js?v=1"></script>
+  <script src="osiris-layers.js?v=3"></script>
 </body>
 </html>
