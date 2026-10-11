@@ -321,11 +321,24 @@ html, body {
 .intel-tabs {
   display: flex;
   gap: 4px;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.intel-tabs::-webkit-scrollbar {
+  height: 3px;
+}
+
+.intel-tabs::-webkit-scrollbar-thumb {
+  background: rgba(255, 82, 82, 0.3);
+  border-radius: 2px;
 }
 
 .intel-tab {
-  flex: 1;
-  padding: 6px 4px;
+  flex: 0 0 auto;
+  padding: 6px 8px;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -335,6 +348,7 @@ html, body {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-secondary);
   cursor: pointer;
+  white-space: nowrap;
   transition: var(--transition-fast);
 }
 
@@ -342,6 +356,24 @@ html, body {
   color: var(--text-primary);
   border-color: rgba(255, 82, 82, 0.3);
 }
+
+.layer-badge {
+  display: inline-block;
+  margin-left: auto;
+  margin-right: 8px;
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  min-width: 22px;
+  text-align: center;
+  line-height: 14px;
+}
+
 
 .intel-tab.active {
   color: #ff8a80;
