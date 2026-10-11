@@ -213,6 +213,8 @@
       if (status) {
         status.textContent = `${list.length} (${data.military || 0} mil) · ${data.mode || ''}`;
       }
+      const countBadge = document.getElementById('vesselsCount');
+      if (countBadge) countBadge.textContent = list.length;
 
       const seen = new Set();
       list.forEach((v) => {

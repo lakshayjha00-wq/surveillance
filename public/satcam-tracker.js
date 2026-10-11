@@ -9,15 +9,15 @@
   const STREAMS = {
     iss_earth: {
       name: "ISS Live — Earth Views 🌍",
-      url: "https://www.youtube-nocookie.com/embed/live_stream?channel=UCrn791W1HkGv_kQo5_H5YfQ&autoplay=1&mute=1"
+      url: "https://www.youtube-nocookie.com/embed/xRPjKOm21No?autoplay=1&mute=1&enablejsapi=1"
     },
     nasa_tv: {
-      name: "NASA TV Live Feed 🛰️",
-      url: "https://www.youtube-nocookie.com/embed/live_stream?channel=UCoS3J2ISvZyGt1c5SAD87_w&autoplay=1&mute=1"
+      name: "NASA Live Feed 🛰️",
+      url: "https://www.youtube-nocookie.com/embed/21X5lGlDOfg?autoplay=1&mute=1&enablejsapi=1"
     },
     iss_crew: {
-      name: "ISS Crew & Cabin Feed 👨‍🚀",
-      url: "https://www.youtube.com/embed/P9C25Un7xaM?autoplay=1&mute=1"
+      name: "ISS Space Station Views 👨‍🚀",
+      url: "https://www.youtube-nocookie.com/embed/P9C25Un7xaM?autoplay=1&mute=1&enablejsapi=1"
     },
     custom: {
       name: "Custom YouTube ID 🛠️",
