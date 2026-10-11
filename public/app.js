@@ -712,22 +712,57 @@ function processLiveFlights(flightsData) {
   if (viewer.scene.requestRenderMode) viewer.scene.requestRender();
 }
 
+function sendFlightViewport() {
+  if (!flightSocket || flightSocket.readyState !== WebSocket.OPEN) return;
+  try {
+    const rect = viewer.camera.computeViewRectangle();
+    if (rect) {
+      const south = Cesium.Math.toDegrees(rect.south);
+      const west = Cesium.Math.toDegrees(rect.west);
+      const north = Cesium.Math.toDegrees(rect.north);
+      const east = Cesium.Math.toDegrees(rect.east);
+      flightSocket.send(JSON.stringify({ type: 'viewport', bbox: [south, west, north, east] }));
+    }
+  } catch (e) {}
+}
+
 function connectFlightSocket() {
   if (flightSocket) return;
-  // Connect to the Node.js WebSocket backend
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   flightSocket = new WebSocket(`${wsProtocol}//${window.location.host}/ws/flights`);
 
+  flightSocket.onopen = () => {
+    sendFlightViewport();
+  };
+
   flightSocket.onmessage = (event) => {
-    const payload = JSON.parse(event.data);
-    if (payload.flights) {
-      processLiveFlights(payload.flights);
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.type === 'threat_alert') {
+        triggerHudThreatWarning(payload.flight_id, payload.zone);
+        return;
+      }
+
+      const flightList = payload.data || payload.flights;
+      if (Array.isArray(flightList)) {
+        processLiveFlights(flightList);
+        const countBadge = document.getElementById('flightsCount');
+        if (countBadge) {
+          countBadge.textContent = payload.total_global || payload.count || flightList.length;
+        }
+      }
+    } catch (e) {
+      console.warn('[Socket] Message parse error:', e);
     }
   };
 
   flightSocket.onerror = () => { console.error('[Socket] Flight stream error.'); };
   flightSocket.onclose = () => { flightSocket = null; };
 }
+
+viewer.camera.moveEnd.addEventListener(() => {
+  sendFlightViewport();
+});
 
 function triggerHudThreatWarning(flightId, zoneName) {
   const f = flightsById[flightId];
@@ -759,6 +794,8 @@ document.getElementById('toggleFlights').addEventListener('change', (e) => {
       flightBillboards.remove(flightMarkers[id]);
       delete flightMarkers[id];
     });
+    const countBadge = document.getElementById('flightsCount');
+    if (countBadge) countBadge.textContent = '--';
   }
   viewer.scene.requestRender();
 });
