@@ -266,6 +266,8 @@
       }
       
       console.log(`✅ Loaded ${satrecs.length} valid orbits. Starting propagation...`);
+      const countBadge = document.getElementById('satellitesCount');
+      if (countBadge) countBadge.textContent = satrecs.length;
       propagatePositions();
       
       if (document.getElementById('toggleSatellites').checked) {
