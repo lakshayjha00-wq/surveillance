@@ -13,10 +13,11 @@ const {
   upsertAircraftBatch,
   upsertSatelliteBatch,
   queryDb,
-  execDb,
 } = require('./lib/telemetry-db');
 const { propagateSatellitesChunked } = require('./lib/satellite-propagation');
 const { evaluateZoneThreat, buildCriticalPayload } = require('./lib/threat-evaluator');
+const { registerJob, runJob } = require('./lib/job-monitor');
+const { persistAlert } = require('./lib/alert-workflow');
 
 const LOG = '[CRISIS-ANALYZER]';
 
@@ -39,22 +40,21 @@ class CrisisZoneAnalyzer {
     this._getFlights = getFlights;
     this._intervalMs = intervalMs;
     this._timer = null;
-    this._running = false;
     this._zones = getCrisisZones();
   }
 
   async start() {
     await initTelemetrySchema();
+    registerJob('crisis-zone-analysis', {
+      name: 'Crisis-zone threat analysis',
+      intervalMs: this._intervalMs
+    });
 
     console.log(`${LOG} Running initial evaluation pass...`);
-    await this._tick();
+    await runJob('crisis-zone-analysis', () => this._tick()).catch(() => {});
 
     this._timer = setInterval(() => {
-      if (this._running) {
-        console.log(`${LOG} Previous tick still in flight — skipping interval.`);
-        return;
-      }
-      this._tick();
+      runJob('crisis-zone-analysis', () => this._tick()).catch(() => {});
     }, this._intervalMs);
 
     if (this._timer.unref) this._timer.unref();
@@ -74,7 +74,6 @@ class CrisisZoneAnalyzer {
   }
 
   async _tick() {
-    this._running = true;
     const tickStart = Date.now();
 
     try {
@@ -97,8 +96,7 @@ class CrisisZoneAnalyzer {
       console.log(`${LOG} Pass completed in ${Date.now() - tickStart}ms`);
     } catch (err) {
       console.error(`${LOG} Tick failed: ${err.message}`);
-    } finally {
-      this._running = false;
+      throw err;
     }
   }
 
@@ -117,7 +115,7 @@ class CrisisZoneAnalyzer {
       );
     } catch (err) {
       console.error(`${LOG} TLE read failed: ${err.message}`);
-      return;
+      throw err;
     }
 
     if (!tleRows.length) return;
@@ -137,44 +135,35 @@ class CrisisZoneAnalyzer {
     if (!evaluation.triggered) return;
 
     const payload = buildCriticalPayload(zone, evaluation);
-    await this._persistAlert(zone, payload, evaluation);
-    this._broadcast(payload);
+    const created = await this._persistAlert(zone, payload, evaluation);
+    if (created) this._broadcast(payload);
   }
 
   async _persistAlert(zone, payload, evaluation) {
     const alertMinute = payload.timestamp.slice(0, 16);
     const alertId = `CZ-${zone.id}-${alertMinute}`;
+    const milCount = evaluation.breaches.military_aircraft.length;
+    const reconCount = evaluation.breaches.recon_satellites.length;
+    const summary =
+      `${payload.severity}: ${zone.name} — ${milCount} military aircraft, ` +
+      `${reconCount} recon satellite(s) inside ${zone.radius_km}km radius`;
 
-    try {
-      const existing = await queryDb(
-        'SELECT 1 FROM tactical_alerts WHERE id = ?',
-        [alertId]
-      );
-      if (existing.length > 0) return;
+    payload.alert_id = alertId;
+    payload.summary = summary;
 
-      const milCount = evaluation.breaches.military_aircraft.length;
-      const reconCount = evaluation.breaches.recon_satellites.length;
-      const summary =
-        `CRITICAL: ${zone.name} — ${milCount} military aircraft, ` +
-        `${reconCount} recon satellite(s) inside ${zone.radius_km}km radius`;
+    const created = await persistAlert({
+      id: alertId,
+      alertType: 'CRISIS_ZONE_BREACH',
+      summary,
+      triggeredBy: JSON.stringify(payload.trigger_rules),
+      timestamp: Date.now(),
+      severity: payload.severity,
+      confidence: payload.confidence,
+      confidenceBasis: payload.confidence_basis,
+    });
 
-      await execDb(
-        `INSERT INTO tactical_alerts (id, alert_type, summary, triggered_by_entity, timestamp, severity)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          alertId,
-          'CRISIS_ZONE_BREACH',
-          summary,
-          JSON.stringify(payload.trigger_rules),
-          Date.now(),
-          'CRITICAL',
-        ]
-      );
-
-      console.warn(`${LOG} 🚨 ${summary}`);
-    } catch (err) {
-      console.error(`${LOG} Alert persist failed (${alertId}): ${err.message}`);
-    }
+    if (created) console.warn(`${LOG} ${summary}`);
+    return created;
   }
 
   static getZones() {
