@@ -8,19 +8,23 @@ const db = new sqlite3.Database(dbPath);
 
 function initDB() {
   return new Promise((resolve, reject) => {
-    db.run(`
-      CREATE TABLE IF NOT EXISTS satellites (
-        norad_id TEXT PRIMARY KEY,
-        name TEXT,
-        tle1 TEXT,
-        tle2 TEXT,
-        type TEXT,
-        last_updated INTEGER
-      )
-    `, (err) => {
-      if (err) return reject(err);
-      console.log('📦 Database ready: satellites.db');
-      resolve();
+    db.serialize(() => {
+      db.run('PRAGMA journal_mode = WAL;');
+      db.run('PRAGMA synchronous = NORMAL;');
+      db.run(`
+        CREATE TABLE IF NOT EXISTS satellites (
+          norad_id TEXT PRIMARY KEY,
+          name TEXT,
+          tle1 TEXT,
+          tle2 TEXT,
+          type TEXT,
+          last_updated INTEGER
+        )
+      `, (err) => {
+        if (err) return reject(err);
+        console.log('📦 Database ready (WAL mode enabled): satellites.db');
+        resolve();
+      });
     });
   });
 }
@@ -100,7 +104,8 @@ function getAllSatellites() {
 }
 
 // Automatically sync DB periodically (every 12 hours)
-setInterval(fetchAndIngestCelesTrak, 12 * 60 * 60 * 1000);
+const satelliteSyncTimer = setInterval(fetchAndIngestCelesTrak, 12 * 60 * 60 * 1000);
+satelliteSyncTimer.unref();
 
 module.exports = {
   db,
