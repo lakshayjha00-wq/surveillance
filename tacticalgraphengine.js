@@ -1,5 +1,6 @@
 // TacticalGraphEngine.js
 const { db } = require('./satellite-db');
+const { persistAlert } = require('./lib/alert-workflow');
 
 /**
  * Ensures the intelligence matrix tables exist inside your SQLite database
@@ -62,7 +63,7 @@ function getHaversineDistance(lat1, lon1, lat2, lon2) {
 /**
  * Cross-references Watchlist locations against Active Events inside Fenced Sectors
  */
-async function evaluateEntityCrossCorrelation() {
+async function evaluateEntityCrossCorrelation({ notify } = {}) {
   console.log('[INTEL ENGINE] Running dot-connecting analysis pass...');
   const now = Date.now();
   const timeWindow = now - (24 * 60 * 60 * 1000); // Lookback limit: 24 Hours
@@ -81,7 +82,7 @@ async function evaluateEntityCrossCorrelation() {
             const eventDist = getHaversineDistance(event.latitude, event.longitude, region.center_lat, region.center_lon);
 
             if (eventDist <= region.radius_km) {
-              await triggerTacticalAlert(person, region, event, now);
+              await triggerTacticalAlert(person, region, event, now, notify);
             }
           }
         }
@@ -89,21 +90,55 @@ async function evaluateEntityCrossCorrelation() {
     }
   } catch (err) {
     console.error('[INTEL ENGINE ERROR] Processing cycle failed:', err.message);
+    throw err;
   }
 }
 
-async function triggerTacticalAlert(person, region, event, timestamp) {
+async function triggerTacticalAlert(person, region, event, timestamp, notify) {
   const alertId = `ALT-${person.id}-${event.id}`;
-  const duplicateCheck = await queryDb("SELECT 1 FROM tactical_alerts WHERE id = ?", [alertId]);
-  if (duplicateCheck.length > 0) return;
+  const severity = normalizeSeverity(event.severity);
+  const summary = `${severity} INTERSECTION: Watchlist Entity [${person.name}] localized within Monitored Area [${region.name}] concurrently matching active event: "${event.description}"`;
+  const confidenceBasis = 'One watchlist/event correlation rule matched; source reliability is not calibrated';
+  const created = await persistAlert({
+    id: alertId,
+    alertType: 'ENTITY_CORRELATION',
+    summary,
+    triggeredBy: person.id,
+    timestamp,
+    severity,
+    confidence: 'MODERATE',
+    confidenceBasis,
+  });
+  if (!created) return;
 
-  const summary = `CRITICAL INTERSECTION: Watchlist Entity [${person.name}] localized within Monitored Area [${region.name}] concurrently matching active event: "${event.description}"`;
-  
-  await executeDb(
-    "INSERT INTO tactical_alerts (id, alert_type, summary, triggered_by_entity, timestamp, severity) VALUES (?, ?, ?, ?, ?, ?)",
-    [alertId, 'ENTITY_CORRELATION', summary, person.id, timestamp, 'CRITICAL']
-  );
-  console.warn(`[🚨 THREAT DETECTION ALERT] ${summary}`);
+  console.warn(`[THREAT DETECTION ALERT] ${summary}`);
+  if (notify) {
+    notify({
+      type: 'ENTITY_CORRELATION_ALERT',
+      alert_id: alertId,
+      alert_type: 'ENTITY_CORRELATION',
+      summary,
+      severity,
+      confidence: 'MODERATE',
+      confidence_basis: confidenceBasis,
+      status: 'OPEN',
+      requires_operator_review: true,
+      action_taken: false,
+      timestamp,
+      zone: {
+        id: region.id,
+        name: region.name,
+        center: { lat: region.center_lat, lon: region.center_lon },
+      },
+    });
+  }
+}
+
+function normalizeSeverity(value) {
+  const severity = String(value || '').toUpperCase();
+  if (severity === 'MODERATE') return 'MEDIUM';
+  if (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(severity)) return severity;
+  return 'HIGH';
 }
 
 // Helper Wrappers for DB operations
@@ -112,15 +147,20 @@ function queryDb(sql, params = []) {
     db.all(sql, params, (err, rows) => (err ? rej(err) : res(rows)));
   });
 }
-function executeDb(sql, params = []) {
-  return new Promise((res, rej) => {
-    db.run(sql, params, (err) => (err ? rej(err) : res(true)));
-  });
+
+function escapeGraphText(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[char]);
 }
 
 /**
  * Extracts the current Knowledge Graph state for a specific zone
- * Connecting News, Weather, Traffic, Conflicts, and calculating probabilities.
+ * Connects source-attributed news, natural events, traffic, and conflict reports.
  */
 async function extractKnowledgeGraph(zoneId) {
   const nodes = [];
@@ -130,59 +170,55 @@ async function extractKnowledgeGraph(zoneId) {
   nodes.push({ id: `ZONE-${zoneId}`, label: `Crisis Zone\n${zoneId}`, group: 'zone', value: 20 });
   
   // Fetch latest data from pipelines
-  const news = await queryDb("SELECT * FROM news_articles WHERE zone_id = ? ORDER BY timestamp DESC LIMIT 3", [zoneId]);
-  const weather = await queryDb("SELECT * FROM weather_reports WHERE zone_id = ? ORDER BY timestamp DESC LIMIT 1", [zoneId]);
-  const traffic = await queryDb("SELECT * FROM traffic_incidents WHERE zone_id = ? ORDER BY timestamp DESC LIMIT 3", [zoneId]);
-  const conflict = await queryDb("SELECT * FROM conflict_assessments WHERE zone_id = ? ORDER BY timestamp DESC LIMIT 1", [zoneId]);
+  const news = await queryDb("SELECT * FROM news_articles WHERE zone_id = ? AND source_url IS NOT NULL ORDER BY timestamp DESC LIMIT 3", [zoneId]);
+  const weather = await queryDb("SELECT * FROM weather_reports WHERE zone_id = ? AND source_url IS NOT NULL ORDER BY timestamp DESC LIMIT 1", [zoneId]);
+  const traffic = await queryDb("SELECT * FROM traffic_incidents WHERE zone_id = ? AND source_url IS NOT NULL ORDER BY timestamp DESC LIMIT 3", [zoneId]);
+  const conflict = await queryDb("SELECT * FROM conflict_assessments WHERE zone_id = ? AND source_url IS NOT NULL ORDER BY timestamp DESC LIMIT 1", [zoneId]);
   
   // Add News Nodes
   news.forEach(n => {
-    nodes.push({ id: n.id, label: `NEWS: ${n.headline.substring(0, 20)}...`, group: 'news', title: n.headline });
+    nodes.push({
+      id: n.id,
+      label: `NEWS: ${n.headline.substring(0, 20)}...`,
+      group: 'news',
+      title: `${escapeGraphText(n.headline)}\nSource: ${escapeGraphText(n.source)}\nLocation: ${escapeGraphText(n.location_precision)}\n${escapeGraphText(n.source_url)}`,
+    });
     edges.push({ from: n.id, to: `ZONE-${zoneId}`, label: 'reports on' });
   });
   
-  // Add Weather
-  let badWeather = false;
+  // Add geolocated natural hazards
   weather.forEach(w => {
-    nodes.push({ id: w.id, label: `WEATHER: ${w.condition}\nVis: ${Math.round(w.visibility_km)}km`, group: 'weather' });
+    const eventName = w.event_title || w.condition || 'Natural event';
+    nodes.push({
+      id: w.id,
+      label: `EVENT: ${eventName.substring(0, 24)}`,
+      group: 'weather',
+      title: `${escapeGraphText(eventName)}\nCategory: ${escapeGraphText(w.event_category || 'Unspecified')}\nSource: ${escapeGraphText(w.source)}\n${escapeGraphText(w.source_url)}`,
+    });
     edges.push({ from: w.id, to: `ZONE-${zoneId}`, label: 'affects' });
-    if (w.condition !== 'Clear') badWeather = true;
   });
   
-  // Add Traffic
-  let blockedTraffic = false;
+  // Add source-backed traffic observations when a provider is configured.
   traffic.forEach(t => {
-    nodes.push({ id: t.id, label: `TRAFFIC: ${t.status}\n${t.road_name}`, group: 'traffic' });
+    nodes.push({
+      id: t.id,
+      label: `TRAFFIC: ${t.status}\n${t.road_name}`,
+      group: 'traffic',
+      title: `Source: ${escapeGraphText(t.source)}\n${escapeGraphText(t.source_url)}`,
+    });
     edges.push({ from: t.id, to: `ZONE-${zoneId}`, label: 'impacts' });
-    if (t.status.includes('Block') || t.status.includes('Military')) blockedTraffic = true;
   });
   
-  // Add Conflict
-  let highRisk = false;
+  // Add reported events without inferring uncalibrated risk from headlines.
   conflict.forEach(c => {
-    nodes.push({ id: c.id, label: `INTEL: Risk ${c.risk_level}`, group: 'intel' });
+    nodes.push({
+      id: c.id,
+      label: `EVENT: ${c.assessment_summary.substring(0, 24)}`,
+      group: 'intel',
+      title: `${escapeGraphText(c.assessment_summary)}\nAssessment: ${escapeGraphText(c.risk_level)}\nSource: ${escapeGraphText(c.source)}\nLocation: ${escapeGraphText(c.location_precision)}\n${escapeGraphText(c.source_url)}`,
+    });
     edges.push({ from: c.id, to: `ZONE-${zoneId}`, label: 'assesses' });
-    if (c.risk_level === 'HIGH' || c.risk_level === 'CRITICAL') highRisk = true;
   });
-  
-  // CALCULATE PROBABILITY CONSEQUENCES
-  if (badWeather && blockedTraffic) {
-    const outcomeId = `OUTCOME-1-${zoneId}`;
-    nodes.push({ id: outcomeId, label: 'OUTCOME:\nSupply Line\nDisruption', group: 'outcome', value: 15, color: '#ff9900' });
-    edges.push({ from: `ZONE-${zoneId}`, to: outcomeId, label: 'Probability: 85%' });
-  }
-  
-  if (highRisk && blockedTraffic) {
-    const outcomeId = `OUTCOME-2-${zoneId}`;
-    nodes.push({ id: outcomeId, label: 'OUTCOME:\nImminent\nEscalation', group: 'outcome', value: 15, color: '#ff4444' });
-    edges.push({ from: `ZONE-${zoneId}`, to: outcomeId, label: 'Probability: 72%' });
-  }
-
-  if (badWeather && highRisk) {
-    const outcomeId = `OUTCOME-3-${zoneId}`;
-    nodes.push({ id: outcomeId, label: 'OUTCOME:\nLimited Air\nSupport', group: 'outcome', value: 15, color: '#ff9900' });
-    edges.push({ from: `ZONE-${zoneId}`, to: outcomeId, label: 'Probability: 90%' });
-  }
 
   return { nodes, edges };
 }
