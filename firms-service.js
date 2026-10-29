@@ -1,5 +1,6 @@
 const { db } = require('./satellite-db');
 const fetch = require('node-fetch');
+const { registerJob, runJob } = require('./lib/job-monitor');
 
 const LOG_CATEGORY = 'FIRMS-SERVICE';
 const log = (msg, level = 'info') => {
@@ -17,6 +18,9 @@ const SOURCES = [
   'VIIRS_NOAA20_NRT',
   'VIIRS_NOAA21_NRT'
 ];
+const SYNC_INTERVAL_MS = 30 * 60 * 1000;
+let syncTimer = null;
+let starting = false;
 
 /**
  * Initializes the thermal_events table and unique index
@@ -225,18 +229,20 @@ async function fetchAndIngest() {
   if (!mapKey) {
     log('FIRMS_MAP_KEY is not defined in environment variables. Falling back to Mock Data Ingestion.', 'warning');
     const mockEvents = generateMockEvents();
-    try {
-      const inserted = await saveEventsToDb(mockEvents);
-      log(`Mock Ingestion complete: successfully saved ${inserted} new thermal events.`, 'info');
-    } catch (err) {
-      log(`Failed to ingest mock thermal events: ${err.message}`, 'error');
-    }
-    return;
+    const inserted = await saveEventsToDb(mockEvents);
+    log(`Mock Ingestion complete: successfully saved ${inserted} new thermal events.`, 'info');
+    return {
+      degraded: true,
+      detail: 'FIRMS_MAP_KEY is not configured; mock data was ingested'
+    };
   }
 
   log(`Starting NASA FIRMS API sync cycle for Middle East (${BOUNDING_BOX})...`, 'info');
   let totalDetections = 0;
   let totalSaved = 0;
+  let successfulSources = 0;
+  let usedMockFallback = false;
+  const sourceErrors = [];
 
   for (const source of SOURCES) {
     try {
@@ -257,6 +263,7 @@ async function fetchAndIngest() {
       
       if (csvText.includes('No data available')) {
         log(`No data available from source ${source} for the selected area.`, 'info');
+        successfulSources++;
         continue;
       }
 
@@ -272,47 +279,67 @@ async function fetchAndIngest() {
       totalDetections += filteredEvents.length;
       const savedCount = await saveEventsToDb(filteredEvents);
       totalSaved += savedCount;
+      successfulSources++;
       
       log(`Source ${source}: Ingested ${savedCount} new alerts (filtered out ${rawEvents.length - filteredEvents.length} low-confidence detections).`, 'info');
 
     } catch (err) {
       log(`Error fetching/ingesting FIRMS source ${source}: ${err.message}`, 'error');
+      sourceErrors.push(`${source}: ${err.message}`);
       // If we encounter a key authentication failure, let's fall back to mock data
       if (err.message.includes('Invalid MAP_KEY') || err.message.includes('unauthorized') || err.message.includes('401') || err.message.includes('403')) {
         log('Key validation failure detected. Performing mock data fallback...', 'warning');
         const mockEvents = generateMockEvents();
-        try {
-          const inserted = await saveEventsToDb(mockEvents);
-          log(`Mock Ingestion complete: successfully saved ${inserted} new thermal events.`, 'info');
-          break; // Stop querying other sources to avoid duplicate warnings
-        } catch (mockErr) {
-          log(`Failed to ingest mock thermal events: ${mockErr.message}`, 'error');
-        }
+        const inserted = await saveEventsToDb(mockEvents);
+        log(`Mock Ingestion complete: successfully saved ${inserted} new thermal events.`, 'info');
+        usedMockFallback = true;
+        break; // Stop querying other sources to avoid duplicate warnings
       }
     }
   }
 
   log(`NASA FIRMS sync complete. Total active/nominal detections parsed: ${totalDetections}. Total newly saved: ${totalSaved}.`, 'info');
+  if (successfulSources === 0 && !usedMockFallback) {
+    throw new Error(`All NASA FIRMS sources failed: ${sourceErrors.join('; ') || 'no source returned data'}`);
+  }
+  if (usedMockFallback || sourceErrors.length > 0) {
+    return {
+      degraded: true,
+      detail: usedMockFallback
+        ? 'NASA FIRMS authentication failed; mock data was ingested'
+        : `${sourceErrors.length} NASA FIRMS source(s) failed`
+    };
+  }
+  return { degraded: false, detail: `Live data received from ${successfulSources} NASA FIRMS source(s)` };
 }
 
 /**
  * Starts the background loop that runs every 30 minutes
  */
 function start() {
+  if (syncTimer || starting) return;
+  starting = true;
   log('Starting background surveillance service for NASA FIRMS...', 'info');
-  initSchema()
-    .then(() => {
-      // Run once immediately on start
-      fetchAndIngest();
+  registerJob('firms-ingestion', {
+    name: 'NASA FIRMS fire-data ingestion',
+    intervalMs: SYNC_INTERVAL_MS
+  });
 
-      // Schedule to run every 30 minutes
-      const intervalMs = 30 * 60 * 1000;
-      setInterval(() => {
-        fetchAndIngest();
-      }, intervalMs);
+  runJob('firms-ingestion', async () => {
+    await initSchema();
+    return fetchAndIngest();
+  })
+    .then(() => {
+      if (syncTimer) return;
+      syncTimer = setInterval(() => {
+        runJob('firms-ingestion', fetchAndIngest).catch(() => {});
+      }, SYNC_INTERVAL_MS);
     })
     .catch((err) => {
       log(`Failed to start FIRMS service: ${err.message}`, 'error');
+    })
+    .finally(() => {
+      starting = false;
     });
 }
 
