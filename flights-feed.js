@@ -4,6 +4,7 @@
 
 const FEET_TO_M = 0.3048;
 const KNOTS_TO_MS = 0.514444;
+const { registerJob, runJob } = require('./lib/job-monitor');
 
 function parseAdsbAltMeters(ac) {
   if (ac.alt_baro === 'ground') {
@@ -168,6 +169,10 @@ function mergeFlights(civilian, military) {
 
 function createFlightFeed({ fetchWithTimeout, fetch, log }) {
   const REFRESH_MS = 5000;
+  registerJob('flight-feed-refresh', {
+    name: 'Flight data refresh',
+    intervalMs: REFRESH_MS
+  });
   let state = {
     flights: [],
     timestamp: 0,
@@ -178,36 +183,39 @@ function createFlightFeed({ fetchWithTimeout, fetch, log }) {
     lastError: null
   };
 
-  async function refresh(source = state.source) {
-    if (state.refreshing) return state;
-    state.refreshing = true;
-    state.source = source;
-    try {
-      const [civResult, milResult] = await Promise.allSettled([
-        fetchCivilian(source, fetchWithTimeout, fetch, log),
-        fetchAdsbMilitary(fetchWithTimeout, log)
-      ]);
+  function refresh(source = state.source) {
+    return runJob('flight-feed-refresh', async () => {
+      state.refreshing = true;
+      state.source = source;
+      try {
+        const [civResult, milResult] = await Promise.allSettled([
+          fetchCivilian(source, fetchWithTimeout, fetch, log),
+          fetchAdsbMilitary(fetchWithTimeout, log)
+        ]);
 
-      const civilian = civResult.status === 'fulfilled' ? civResult.value : [];
-      const military = milResult.status === 'fulfilled' ? milResult.value : [];
+        const civilian = civResult.status === 'fulfilled' ? civResult.value : [];
+        const military = milResult.status === 'fulfilled' ? milResult.value : [];
 
-      if (civResult.status === 'rejected' && milResult.status === 'rejected') {
-        throw new Error(`${civResult.reason?.message}; ${milResult.reason?.message}`);
+        if (civResult.status === 'rejected' && milResult.status === 'rejected') {
+          throw new Error(`${civResult.reason?.message}; ${milResult.reason?.message}`);
+        }
+
+        state.flights = mergeFlights(civilian, military);
+        state.civilian = civilian.length;
+        state.military = military.length;
+        state.timestamp = Date.now();
+        state.lastError = null;
+        log(`Live feed: ${state.flights.length} aircraft (${state.civilian} civ + ${state.military} mil)`, 'FLIGHTS');
+      } catch (err) {
+        state.lastError = err.message;
+        throw err;
+      } finally {
+        state.refreshing = false;
       }
-
-      state.flights = mergeFlights(civilian, military);
-      state.civilian = civilian.length;
-      state.military = military.length;
-      state.timestamp = Date.now();
-      state.lastError = null;
-      log(`Live feed: ${state.flights.length} aircraft (${state.civilian} civ + ${state.military} mil)`, 'FLIGHTS');
-    } catch (err) {
+    }).then(() => state).catch((err) => {
       state.lastError = err.message;
-      log(`Flight feed error: ${err.message}`, 'FLIGHTS');
-    } finally {
-      state.refreshing = false;
-    }
-    return state;
+      return state;
+    });
   }
 
   refresh('auto');
