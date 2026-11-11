@@ -24,9 +24,24 @@ const { haversineKm } = require('./lib/haversine');
 const { WsThreatRelay } = require('./ws-threat-relay');
 const { getCesiumIonToken } = require('./lib/cesium-config');
 const { resolveOsmLayer, buildTileUrl, UA } = require('./lib/osm-tiles');
-const { initPipelinesSchema, startPipelineGenerator } = require('./data-pipelines');
+const { initPipelinesSchema, startPipelineIngestion } = require('./data-pipelines');
 const { extractKnowledgeGraph } = require('./tacticalgraphengine');
-const { getCCTVCameras, getCyberThreats, getCyberAttacks } = require('./lib/osiris-feeds');
+const compression = require('compression');
+const { registerJob, runJob, getJobs } = require('./lib/job-monitor');
+const { initAlertWorkflowSchema } = require('./lib/alert-workflow');
+const { getMaintenanceReport, startMaintenanceChecks } = require('./lib/maintenance-checks');
+const {
+  getCCTVCameras,
+  getCyberThreats,
+  getCyberAttacks,
+  getEarthquakes,
+  getWeatherEvents,
+  getSpaceWeather,
+  searchSanctions,
+  getGdeltEvents,
+  getNewsFeed,
+  getMalwareIntel,
+} = require('./lib/osiris-feeds');
 
 const log = (msg, category = 'SYSTEM') => console.log(`[${category}] ${msg}`);
 
@@ -45,6 +60,7 @@ async function fetchWithTimeout(url, options = {}, timeout = 10000) {
 }
 
 const app = express();
+app.use(compression());
 const satDb = require('./satellite-db');
 
 // ═══ HTTP SERVER (shared with WebSocket) ═══
@@ -58,23 +74,32 @@ satDb.initDB().then(async () => {
   // Initialize the Entity Tracking schema inside the shared DB instance
   log('Initializing Intelligence Tracking Matrix Schema...', 'INTEL');
   await initIntelSchema();
+  await initAlertWorkflowSchema();
   
   // Initialize multi-pipeline schema and background generators
   log('Initializing Multi-Pipeline Ingestion Schema...', 'PIPELINES');
   await initPipelinesSchema();
-  startPipelineGenerator();
+  startPipelineIngestion();
+  startMaintenanceChecks(satDb.db, { registerJob, runJob });
 
   // Initialize and start NASA FIRMS Active Fire Background Service
   log('Initializing NASA FIRMS Active Fire Surveillance Background Service...', 'FIRMS');
   firmsService.start();
 
   // Kickstart background automated tracking evaluation loops (every 60 seconds)
+  registerJob('entity-cross-correlation', {
+    name: 'Entity cross-correlation',
+    intervalMs: 60000
+  });
+  const runEntityCrossCorrelation = () => evaluateEntityCrossCorrelation({
+    notify: (payload) => wsRelay.broadcast(payload)
+  });
   setInterval(async () => {
-    await evaluateEntityCrossCorrelation();
+    await runJob('entity-cross-correlation', runEntityCrossCorrelation).catch(() => {});
   }, 60000);
 
   // Run an immediate initial analysis block on boot
-  await evaluateEntityCrossCorrelation();
+  await runJob('entity-cross-correlation', runEntityCrossCorrelation).catch(() => {});
 
   // ═══ CRISIS ZONE ANALYZER + WEBSOCKET RELAY ═══
   log('Initializing WebSocket Threat Relay...', 'WS');
@@ -90,6 +115,19 @@ satDb.initDB().then(async () => {
 const PORT = 3001;
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/api/system/jobs', (req, res) => {
+  res.json({ jobs: getJobs(), timestamp: Date.now() });
+});
+
+app.get('/api/system/maintenance', async (req, res) => {
+  try {
+    res.json(await getMaintenanceReport(satDb.db));
+  } catch (err) {
+    console.error('[MAINTENANCE] Failed to generate database report:', err);
+    res.status(500).json({ error: 'Failed to generate database maintenance report' });
+  }
+});
 
 // ═══ NEW API ENDPOINTS FOR YOUR INTELLIGENCE SIDEBAR ═══
 app.get('/api/tactical-alerts', async (req, res) => {
@@ -432,135 +470,229 @@ app.get('/api/massive-tle', async (req, res) => {
   }
 });
 
-// ═══ NEW: HIGH-FREQUENCY FLIGHT TELEMETRY STREAM ═══
+// ═══ NEW: OSIRIS API ENDPOINTS ═══
+
+// 1. Earthquakes (USGS)
+app.get('/api/earthquakes', async (req, res) => {
+  try {
+    const minMag = parseFloat(req.query.minMag) || 2.5;
+    const data = await getEarthquakes(minMag);
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch earthquake data', message: err.message });
+  }
+});
+
+// 2. Weather Events (NASA EONET)
+app.get('/api/weather-events', async (req, res) => {
+  try {
+    const data = await getWeatherEvents();
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch weather events', message: err.message });
+  }
+});
+
+// 3. Space Weather (NOAA SWPC)
+app.get('/api/space-weather', async (req, res) => {
+  try {
+    const data = await getSpaceWeather();
+    res.set('Cache-Control', 'public, max-age=120');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch space weather', message: err.message });
+  }
+});
+
+// 4. Sanctions / OFAC Search (OpenSanctions & Curated SDN Index)
+app.get('/api/sanctions/search', async (req, res) => {
+  try {
+    const q = req.query.q || '';
+    const data = await searchSanctions(q);
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Sanctions search failed', message: err.message });
+  }
+});
+
+// 5. GDELT Global Conflict & Unrest Events
+app.get('/api/gdelt-events', async (req, res) => {
+  try {
+    const data = await getGdeltEvents();
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch GDELT events', message: err.message });
+  }
+});
+
+// 6. Multi-Source Global News Feed
+app.get('/api/news', async (req, res) => {
+  try {
+    const data = await getNewsFeed();
+    res.set('Cache-Control', 'public, max-age=120');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch news feed', message: err.message });
+  }
+});
+
+// 7. MalwareBazaar Threat Intel Samples
+app.get('/api/malware', async (req, res) => {
+  try {
+    const data = await getMalwareIntel();
+    res.set('Cache-Control', 'public, max-age=180');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch malware intel', message: err.message });
+  }
+});
+
+// ═══ NATIVE SPATIAL THREAT ENGINE & ACTIVE ZONES ═══
+function isPointInPolygon(lat, lon, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    let xi = polygon[i][1], yi = polygon[i][0]; 
+    let xj = polygon[j][1], yj = polygon[j][0];
+    let intersect = ((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+const ACTIVE_THREAT_POLYGONS = [
+  { id: 'P-1', name: 'Rashtrapati Bhavan Complex', polygon: [[28.6195, 77.1920], [28.6195, 77.2040], [28.6170, 77.2045], [28.6120, 77.2040], [28.6080, 77.2000], [28.6080, 77.1930], [28.6120, 77.1915], [28.6160, 77.1910]] },
+  { id: 'P-2', name: 'Parliament House Complex', polygon: [[28.6205, 77.2050], [28.6205, 77.2110], [28.6170, 77.2130], [28.6145, 77.2120], [28.6145, 77.2050], [28.6170, 77.2040]] },
+  { id: 'P-4', name: 'PMO / 7 Lok Kalyan Marg', polygon: [[28.6060, 77.1960], [28.6060, 77.2050], [28.6010, 77.2050], [28.5990, 77.2020], [28.5990, 77.1970], [28.6010, 77.1940], [28.6040, 77.1940]] },
+  { id: 'R-IGI', name: 'IGI Airport Restricted', polygon: [[28.5750, 77.0800], [28.5750, 77.1150], [28.5450, 77.1150], [28.5350, 77.0950], [28.5400, 77.0800]] },
+  { id: 'R-2', name: 'Pokhran Test Range', center: [26.73, 71.35], radius_km: 40 },
+  { id: 'TEST-1', name: 'DELHI MASSIVE TEST ZONE', center: [28.5561, 77.0999], radius_km: 100 }
+];
+
+// ═══ HIGH-FREQUENCY FLIGHT TELEMETRY STREAM WITH VIEWPORT CULLING ═══
 const flightWsServer = new WebSocket.Server({ noServer: true });
 
 flightWsServer.on('connection', (ws) => {
-    log('Radar client connected to High-Frequency Flight Stream', 'WS-FLIGHTS');
-    ws.on('close', () => {
-        log('Radar client disconnected from Flight Stream', 'WS-FLIGHTS');
-    });
+  log('Radar client connected to High-Frequency Flight Stream', 'WS-FLIGHTS');
+  ws.bbox = null; // Default: all flights
+
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      if (data.type === 'viewport' && Array.isArray(data.bbox) && data.bbox.length === 4) {
+        // bbox format: [south, west, north, east]
+        ws.bbox = data.bbox;
+      } else if (data.type === 'clear_viewport') {
+        ws.bbox = null;
+      }
+    } catch { /* ignore invalid json */ }
+  });
+
+  ws.on('close', () => {
+    log('Radar client disconnected from Flight Stream', 'WS-FLIGHTS');
+  });
 });
 
 httpServer.on('upgrade', (req, socket, head) => {
-    const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+  const pathname = new URL(req.url || '/', 'http://localhost').pathname;
 
-    if (pathname === '/ws/threats') {
-      wsRelay.handleUpgrade(req, socket, head);
-      return;
-    }
+  if (pathname === '/ws/threats') {
+    wsRelay.handleUpgrade(req, socket, head);
+    return;
+  }
 
-    if (pathname === '/ws/flights') {
-      flightWsServer.handleUpgrade(req, socket, head, (ws) => {
-        flightWsServer.emit('connection', ws, req);
-      });
-      return;
-    }
+  if (pathname === '/ws/flights') {
+    flightWsServer.handleUpgrade(req, socket, head, (ws) => {
+      flightWsServer.emit('connection', ws, req);
+    });
+    return;
+  }
 
-    socket.destroy();
+  socket.destroy();
 });
 
-// The broadcast loop runs 2 times a second (500ms). 
-// It constantly pulls from your existing 'flightFeed' and pushes to the globe.
+// ═══ SINGLE UNIFIED BROADCAST LOOP (500ms) WITH VIEWPORT FILTERING ═══
 setInterval(() => {
-    const state = flightFeed.getState();
-    const payload = JSON.stringify({
-        timestamp: state.timestamp || Date.now(),
-        count: state.flights.length,
-        flights: state.flights
-    });
+  if (flightWsServer.clients.size === 0) return;
 
-    flightWsServer.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(payload);
+  const state = flightFeed.getState();
+  const rawFlights = state.flights;
+  const activeThreats = [];
+
+  const processedFlights = rawFlights.map(f => {
+    if (f.lat == null || f.lon == null) return f;
+
+    let isThreat = false;
+    let threatZoneName = null;
+
+    for (const zone of ACTIVE_THREAT_POLYGONS) {
+      if (zone.polygon && isPointInPolygon(f.lat, f.lon, zone.polygon)) {
+        isThreat = true;
+        threatZoneName = zone.name;
+        break;
+      } else if (zone.center && zone.radius_km) {
+        const dist = haversineKm(f.lat, f.lon, zone.center[0], zone.center[1]);
+        if (dist <= zone.radius_km) {
+          isThreat = true;
+          threatZoneName = zone.name;
+          break;
         }
-    });
-}, 500); 
-// ════════════════════════════════════════════════════
+      }
+    }
 
+    if (isThreat) {
+      activeThreats.push({ flight_id: f.id, zone: threatZoneName });
+      return { ...f, is_threat: true, threat_zone: threatZoneName };
+    }
+    return f;
+  });
+
+  const now = state.timestamp || Date.now();
+  const fullPayload = JSON.stringify({
+    type: 'telemetry_update',
+    timestamp: now,
+    count: processedFlights.length,
+    data: processedFlights
+  });
+
+  flightWsServer.clients.forEach((client) => {
+    if (client.readyState !== WebSocket.OPEN) return;
+
+    if (client.bbox) {
+      const [south, west, north, east] = client.bbox;
+      // Filter to viewport (plus buffer) or active threats
+      const culled = processedFlights.filter(f =>
+        f.is_threat ||
+        (f.lat >= south - 1 && f.lat <= north + 1 && f.lon >= west - 1 && f.lon <= east + 1)
+      );
+
+      client.send(JSON.stringify({
+        type: 'telemetry_update',
+        timestamp: now,
+        count: culled.length,
+        total_global: processedFlights.length,
+        culled: true,
+        data: culled
+      }));
+    } else {
+      client.send(fullPayload);
+    }
+
+    activeThreats.forEach(threat => {
+      client.send(JSON.stringify({
+        type: 'threat_alert',
+        flight_id: threat.flight_id,
+        zone: threat.zone
+      }));
+    });
+  });
+}, 500);
 
 httpServer.listen(PORT, () => {
   console.log(`\n🌍 Earth 3D Globe running at http://localhost:${PORT}`);
   console.log(`📡 WebSocket Threat Relay at ws://localhost:${PORT}/ws/threats`);
   console.log(`✈️  WebSocket Flight Telemetry at ws://localhost:${PORT}/ws/flights\n`);
 });
-// ═══ NATIVE SPATIAL THREAT ENGINE (Replaces Shapely) ═══
-
-// 1. Spatial Math Engine (Ray-Casting)
-function isPointInPolygon(lat, lon, polygon) {
-    let inside = false;
-    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        let xi = polygon[i][1], yi = polygon[i][0]; 
-        let xj = polygon[j][1], yj = polygon[j][0];
-        
-        let intersect = ((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi);
-        if (intersect) inside = !inside;
-    }
-    return inside;
-}
-
-// 2. Renamed to avoid conflicts!
-const ACTIVE_THREAT_POLYGONS = [
-    { id: 'P-1', name: 'Rashtrapati Bhavan Complex', polygon: [[28.6195, 77.1920], [28.6195, 77.2040], [28.6170, 77.2045], [28.6120, 77.2040], [28.6080, 77.2000], [28.6080, 77.1930], [28.6120, 77.1915], [28.6160, 77.1910]] },
-    { id: 'P-2', name: 'Parliament House Complex', polygon: [[28.6205, 77.2050], [28.6205, 77.2110], [28.6170, 77.2130], [28.6145, 77.2120], [28.6145, 77.2050], [28.6170, 77.2040]] },
-    { id: 'P-4', name: 'PMO / 7 Lok Kalyan Marg', polygon: [[28.6060, 77.1960], [28.6060, 77.2050], [28.6010, 77.2050], [28.5990, 77.2020], [28.5990, 77.1970], [28.6010, 77.1940], [28.6040, 77.1940]] },
-    { id: 'R-IGI', name: 'IGI Airport Restricted', polygon: [[28.5750, 77.0800], [28.5750, 77.1150], [28.5450, 77.1150], [28.5350, 77.0950], [28.5400, 77.0800]] },
-    { id: 'R-2', name: 'Pokhran Test Range', center: [26.73, 71.35], radius_km: 40 },
-    // THE TEMPORARY GHOST THREAT TEST ZONE
-    { id: 'TEST-1', name: 'DELHI MASSIVE TEST ZONE', center: [28.5561, 77.0999], radius_km: 100 }
-];
-
-// 3. Upgraded Broadcast Loop 
-setInterval(() => {
-    const state = flightFeed.getState();
-    const rawFlights = state.flights;
-    const activeThreats = [];
-
-    const processedFlights = rawFlights.map(f => {
-        if (f.lat == null || f.lon == null) return f;
-
-        let isThreat = false;
-        let threatZoneName = null;
-
-        for (const zone of ACTIVE_THREAT_POLYGONS) {
-            if (zone.polygon && isPointInPolygon(f.lat, f.lon, zone.polygon)) {
-                isThreat = true;
-                threatZoneName = zone.name;
-                break;
-            } else if (zone.center && zone.radius_km) {
-                const dist = haversineKm(f.lat, f.lon, zone.center[0], zone.center[1]);
-                if (dist <= zone.radius_km) {
-                    isThreat = true;
-                    threatZoneName = zone.name;
-                    break;
-                }
-            }
-        }
-
-        if (isThreat) {
-            activeThreats.push({ flight_id: f.id, zone: threatZoneName });
-            return { ...f, is_threat: true, threat_zone: threatZoneName };
-        }
-        return f;
-    });
-
-    const telemetryPayload = JSON.stringify({
-        type: 'telemetry_update', 
-        timestamp: state.timestamp || Date.now(),
-        count: processedFlights.length,
-        data: processedFlights
-    });
-
-    flightWsServer.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(telemetryPayload);
-            activeThreats.forEach(threat => {
-                client.send(JSON.stringify({
-                    type: 'threat_alert',
-                    flight_id: threat.flight_id,
-                    zone: threat.zone
-                }));
-            });
-        }
-    });
-}, 500);
