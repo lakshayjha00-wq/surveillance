@@ -1,5 +1,5 @@
 /**
- * Live Street Traffic Tracker & Management System — OpenStreetMap & CesiumJS
+ * OpenStreetMap road geometry viewer with local-only traffic action demos.
  */
 (function () {
   'use strict';
@@ -14,7 +14,8 @@
 
   // Active state parameters
   const state = {
-    roads: [], // { id, name, points, congestion, speedKm, lengthDeg, vehicles: [] }
+    roads: [],
+    lastError: null,
     selectedRoadId: null,
     optimizingSignals: false,
     signalTimer: null,
@@ -29,6 +30,16 @@
     gridlockTimer: null,
     lastBbox: null
   };
+
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    })[char]);
+  }
 
   // Helper for computing distance along segments
   function getPathLength(points) {
@@ -92,80 +103,6 @@
     return viewer;
   }
 
-  // Generate gorgeous simulated road grid centered on view coordinates (fallback/offline)
-  function generateProceduralTraffic(lat, lon, bounds) {
-    const roads = [];
-    const sizeDeg = Math.min(0.02, Math.abs(bounds.north - bounds.south) * 0.6);
-    const numRoads = 8;
-    const roadPrefixes = [
-      "Vikas Marg", "Ring Road Link", "Sardar Patel Avenue", "Shanti Path Bypass",
-      "Central Vista Expressway", "Cyber City Boulevard", "Mall Road", "Station Avenue",
-      "Eiffel Bypass", "Giza Gateway", "Broadway Link", "Metro Trunk Road"
-    ];
-
-    for (let i = 0; i < numRoads; i++) {
-      const isVertical = i % 2 === 0;
-      // Spread roads around center
-      const offset = (i - numRoads/2) * (sizeDeg / (numRoads/2)) + (Math.random() - 0.5) * 0.0015;
-      const points = [];
-
-      if (isVertical) {
-        const rLon = lon + offset;
-        const startLat = lat - sizeDeg/2 + (Math.random() - 0.5) * 0.002;
-        const endLat = lat + sizeDeg/2 + (Math.random() - 0.5) * 0.002;
-
-        for (let j = 0; j <= 5; j++) {
-          const frac = j / 5;
-          const pLat = startLat + frac * (endLat - startLat);
-          const pLon = rLon + Math.sin(frac * Math.PI) * 0.0003; // curly/realistic bend
-          points.push({ lat: pLat, lon: pLon });
-        }
-      } else {
-        const rLat = lat + offset;
-        const startLon = lon - sizeDeg/2 + (Math.random() - 0.5) * 0.002;
-        const endLon = lon + sizeDeg/2 + (Math.random() - 0.5) * 0.002;
-
-        for (let j = 0; j <= 5; j++) {
-          const frac = j / 5;
-          const pLon = startLon + frac * (endLon - startLon);
-          const pLat = rLat + Math.sin(frac * Math.PI) * 0.0003; // curly/realistic bend
-          points.push({ lat: pLat, lon: pLon });
-        }
-      }
-
-      // Assign initial congestion status
-      const roll = Math.random();
-      let congestion = "smooth";
-      if (roll > 0.75) congestion = "congested";
-      else if (roll > 0.5) congestion = "moderate";
-
-      const name = roadPrefixes[Math.floor(Math.random() * roadPrefixes.length)] + " Sector-" + (i + 1);
-      const roadId = `proc-road-${i}-${Date.now().toString(36)}`;
-      const lengthDeg = getPathLength(points);
-
-      // Spawn vehicles
-      const vehicles = [];
-      const numVehicles = 3 + Math.floor(Math.random() * 4);
-      for (let v = 0; v < numVehicles; v++) {
-        vehicles.push({
-          progress: v / numVehicles,
-          speedOffset: 0.8 + Math.random() * 0.4
-        });
-      }
-
-      roads.push({
-        id: roadId,
-        name,
-        points,
-        congestion,
-        lengthDeg,
-        vehicles
-      });
-    }
-
-    return roads;
-  }
-
   // Parse Overpass API JSON format into roads
   function parseOverpassData(data) {
     const roads = [];
@@ -177,37 +114,24 @@
       const points = e.geometry.map(g => ({ lat: g.lat, lon: g.lon }));
       if (points.length < 2) return;
 
-      const name = e.tags.name || e.tags.ref || `Unidentified Street (${e.tags.highway || 'road'})`;
-      
-      const roll = Math.random();
-      let congestion = "smooth";
-      if (roll > 0.75) congestion = "congested";
-      else if (roll > 0.5) congestion = "moderate";
-
+      const tags = e.tags || {};
+      const name = tags.name || tags.ref || `Unidentified Street (${tags.highway || 'road'})`;
       const lengthDeg = getPathLength(points);
-      const vehicles = [];
-      const numVehicles = 2 + Math.floor(Math.random() * 4);
-      for (let v = 0; v < numVehicles; v++) {
-        vehicles.push({
-          progress: v / numVehicles,
-          speedOffset: 0.85 + Math.random() * 0.3
-        });
-      }
 
       roads.push({
         id: `osm-road-${e.id}-${index}`,
         name,
         points,
-        congestion,
+        congestion: 'unknown',
         lengthDeg,
-        vehicles
+        vehicles: []
       });
     });
 
     return roads;
   }
 
-  // Fetch from Overpass API with local fallback
+  // Fetch road geometry only; Overpass does not provide live traffic conditions.
   async function fetchTrafficData() {
     ensureLayers();
     if (!isEnabled || !viewer) return;
@@ -217,7 +141,7 @@
       // Too high
       state.roads = [];
       clearMapEntities();
-      updatePanelUi(true); // show zoom-in warning
+      updatePanelUi(true);
       return;
     }
 
@@ -233,9 +157,6 @@
       }
     }
     state.lastBbox = bounds;
-
-    const lat = (bounds.north + bounds.south) / 2;
-    const lon = (bounds.east + bounds.west) / 2;
 
     try {
       // Query motorway, trunk, primary, secondary roads in bbox
@@ -254,15 +175,16 @@
       
       if (loadedRoads.length > 0) {
         state.roads = loadedRoads;
+        state.lastError = null;
         console.log(`[TRAFFIC] Loaded ${loadedRoads.length} roads from OpenStreetMap.`);
       } else {
-        // Bounding box empty of OSM highways, use fallback grid
-        state.roads = generateProceduralTraffic(lat, lon, bounds);
-        console.log("[TRAFFIC] Bounding box empty. Generated procedural grid.");
+        state.roads = [];
+        state.lastError = null;
       }
     } catch (err) {
-      console.warn("[TRAFFIC] Overpass API failed or timed out. Initiating procedural simulation fallback:", err.message);
-      state.roads = generateProceduralTraffic(lat, lon, bounds);
+      console.warn("[TRAFFIC] OpenStreetMap road geometry unavailable:", err.message);
+      state.roads = [];
+      state.lastError = err.message;
     }
 
     // Keep active rerouting/patrol active on reload if their road still exists
@@ -303,7 +225,7 @@
       case 'smooth': return Cesium.Color.fromCssColorString('#10b981');
       case 'moderate': return Cesium.Color.fromCssColorString('#f59e0b');
       case 'congested': return Cesium.Color.fromCssColorString('#ef4444');
-      default: return Cesium.Color.fromCssColorString('#10b981');
+      default: return Cesium.Color.fromCssColorString('#64748b');
     }
   }
 
@@ -452,140 +374,97 @@
     if (isAltAlert) {
       pane.innerHTML = `<div class="traffic-zoom-alert">
         <span style="font-size:20px;display:block;margin-bottom:8px;">📡 ALTITUDE WARNING</span>
-        Zoom in below 15 km to activate street-level traffic monitoring.
+        Zoom in below 15 km to load OpenStreetMap road geometry. Live traffic conditions are unavailable.
       </div>`;
       return;
     }
 
     if (state.roads.length === 0) {
-      pane.innerHTML = `<div class="intel-empty">Scanning viewport for roads...</div>`;
+      const message = state.lastError
+        ? 'OpenStreetMap road geometry is unavailable for this viewport.'
+        : 'No road geometry found in this viewport.';
+      pane.innerHTML = `<div class="intel-empty">${message}<br/>Live speed, congestion, and incident data are unavailable because no traffic provider is configured.</div>`;
       return;
     }
 
-    // Compute metrics
     const totalRoads = state.roads.length;
-    const congestedCount = state.roads.filter(r => r.congestion === 'congested').length;
-    const moderateCount = state.roads.filter(r => r.congestion === 'moderate').length;
-    const smoothCount = state.roads.filter(r => r.congestion === 'smooth').length;
-    
-    // Congestion score (100% is full gridlock)
-    let congestionScore = 0;
-    if (state.gridlockActive) {
-      congestionScore = 95;
-    } else if (state.optimizingSignals) {
-      congestionScore = 5;
-    } else if (totalRoads > 0) {
-      congestionScore = Math.round(((congestedCount * 1.0 + moderateCount * 0.4) / totalRoads) * 100);
-    }
-
-    let bannerHtml = '';
+    let bannerHtml = `<div class="traffic-alert-banner" style="color:#f59e0b;border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.08);">
+      OpenStreetMap road geometry only. Live conditions are unavailable; the controls below are local visual simulations, not dispatch actions.
+    </div>`;
     if (state.optimizingSignals) {
-      bannerHtml = `<div class="traffic-alert-banner" style="color:#10b981;border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.08);">
-        <span>🟢</span> <b>SIGNAL SYNC ACTIVE (Decongestion optimized)</b>
+      bannerHtml += `<div class="traffic-alert-banner" style="color:#10b981;border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.08);">
+        <span>🟢</span> <b>DEMO: signal visualization active</b>
       </div>`;
     } else if (state.gridlockActive) {
-      bannerHtml = `<div class="traffic-alert-banner" style="color:#ef4444;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">
-        <span>🔴</span> <b>CRITICAL GRIDLOCK SIMULATED</b>
+      bannerHtml += `<div class="traffic-alert-banner" style="color:#ef4444;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">
+        <span>🔴</span> <b>DEMO: gridlock visualization active</b>
       </div>`;
     } else if (state.patrolActive) {
       const pRoad = state.roads.find(r => r.id === state.patrolRoadId);
-      bannerHtml = `<div class="traffic-alert-banner" style="color:#38bdf8;border-color:rgba(56,189,248,0.3);background:rgba(56,189,248,0.08);">
-        <span>🚔</span> <b>PATROL ENGAGED: clearing ${pRoad ? pRoad.name.split(' ')[0] : 'street'}</b>
+      bannerHtml += `<div class="traffic-alert-banner" style="color:#38bdf8;border-color:rgba(56,189,248,0.3);background:rgba(56,189,248,0.08);">
+        <span>🚔</span> <b>DEMO: patrol animation on ${escapeHtml(pRoad ? pRoad.name.split(' ')[0] : 'street')}</b>
       </div>`;
     } else if (state.reroutingActive) {
       const rRoad = state.roads.find(r => r.id === state.reroutedRoadId);
-      bannerHtml = `<div class="traffic-alert-banner" style="color:#f59e0b;border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.08);">
-        <span>⚠️</span> <b>DETOUR DEPLOYED on ${rRoad ? rRoad.name.split(' ')[0] : 'street'}</b>
+      bannerHtml += `<div class="traffic-alert-banner" style="color:#f59e0b;border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.08);">
+        <span>⚠️</span> <b>DEMO: detour overlay on ${escapeHtml(rRoad ? rRoad.name.split(' ')[0] : 'street')}</b>
       </div>`;
-    }
-
-    let statusText = "OPTIMAL FLOW";
-    let statusColor = "#10b981";
-    if (congestionScore > 65) {
-      statusText = "HEAVY GRIDLOCK";
-      statusColor = "#ef4444";
-    } else if (congestionScore > 30) {
-      statusText = "MODERATE DELAYS";
-      statusColor = "#f59e0b";
     }
 
     let html = `
       <div class="traffic-overview-container">
         ${bannerHtml}
         
-        <!-- Congestion Meter Card -->
-        <div class="traffic-metric-card" style="border-color:${statusColor}33;background:${statusColor}0b;">
-          <div class="traffic-metric-title">Sector Congestion Index</div>
-          <div class="traffic-metric-value" style="color:${statusColor};">
-            ${congestionScore}% <span>· ${statusText}</span>
-          </div>
-          <div class="traffic-progress-container">
-            <div class="traffic-progress-fill" style="width:${congestionScore}%;background:${statusColor};"></div>
-          </div>
-          <div style="font-size:10px;color:var(--text-secondary);margin-top:8px;display:flex;justify-content:space-between;">
-            <span>Flowing: ${smoothCount}</span>
-            <span>Slow: ${moderateCount}</span>
-            <span>Queued: ${congestedCount}</span>
+        <div class="traffic-metric-card">
+          <div class="traffic-metric-title">Traffic data status</div>
+          <div class="traffic-metric-value" style="color:#f59e0b;">UNAVAILABLE</div>
+          <div style="font-size:10px;color:var(--text-secondary);margin-top:8px;">
+            ${totalRoads} OpenStreetMap road segments loaded; no live speeds or incidents are available.
           </div>
         </div>
 
         <!-- Operations Console -->
         <h3 class="traffic-actions-header">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M21 9H3M21 15H3M12 3v18"/></svg>
-          Operations Center
+          Local Demo Controls — No Dispatch
         </h3>
         
         <div class="traffic-actions-grid">
-          <button class="traffic-action-btn btn-optimize" id="btnOptSignals" title="Synch street signals to green" ${state.optimizingSignals ? 'disabled style="opacity:0.5"' : ''}>
-            🚦 Sync Signals
+          <button class="traffic-action-btn btn-optimize" id="btnOptSignals" title="Local visual simulation only; no signal system is connected" ${state.optimizingSignals ? 'disabled style="opacity:0.5"' : ''}>
+            🚦 Demo Signal Sync
           </button>
-          <button class="traffic-action-btn btn-patrol" id="btnDepPatrol" title="Deploy patrol vehicle to clear blockages" ${state.patrolActive ? 'disabled style="opacity:0.5"' : ''}>
-            🚔 Patrol Dispatch
+          <button class="traffic-action-btn btn-patrol" id="btnDepPatrol" title="Local visual simulation only; no patrol is dispatched" ${state.patrolActive ? 'disabled style="opacity:0.5"' : ''}>
+            🚔 Demo Patrol
           </button>
-          <button class="traffic-action-btn btn-reroute" id="btnRerouteTraffic" title="Enact local detour paths" ${state.reroutingActive ? 'disabled style="opacity:0.5"' : ''}>
-            ⚠️ detour path
+          <button class="traffic-action-btn btn-reroute" id="btnRerouteTraffic" title="Local visual simulation only; no routing system is connected" ${state.reroutingActive ? 'disabled style="opacity:0.5"' : ''}>
+            ⚠️ Demo Detour
           </button>
-          <button class="traffic-action-btn btn-gridlock" id="btnTriggerGridlock" title="Simulate high traffic load">
-            🚨 ${state.gridlockActive ? 'Clear Gridlock' : 'Gridlock Mode'}
+          <button class="traffic-action-btn btn-gridlock" id="btnTriggerGridlock" title="Local visual simulation only">
+            🚨 ${state.gridlockActive ? 'Clear Demo Gridlock' : 'Demo Gridlock'}
           </button>
         </div>
 
         <!-- Monitored Roads List -->
         <h3 class="traffic-actions-header">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-          Active Viewport Sectors
+          OpenStreetMap Road Segments
         </h3>
         
         <div class="traffic-roads-list">
     `;
 
-    // Sort roads: congested first
-    const sortedRoads = [...state.roads].sort((a,b) => {
-      const getWeight = (c) => c === 'congested' ? 3 : c === 'moderate' ? 2 : 1;
-      return getWeight(b.congestion) - getWeight(a.congestion);
-    });
+    const sortedRoads = [...state.roads].sort((a, b) => a.name.localeCompare(b.name));
 
     sortedRoads.forEach(r => {
-      const pillClass = r.congestion;
-      let label = "SMOOTH";
-      let speed = "68 km/h";
-      if (r.congestion === 'congested') {
-        label = "GRIDLOCK";
-        speed = "8-12 km/h";
-      } else if (r.congestion === 'moderate') {
-        label = "MODERATE";
-        speed = "32-40 km/h";
-      }
-
       html += `
-        <article class="traffic-card-road is-${r.congestion}" data-road-id="${r.id}">
+        <article class="traffic-card-road" data-road-id="${r.id}">
           <div class="traffic-road-head">
-            <span class="traffic-road-title" title="${r.name}">${r.name}</span>
-            <span class="traffic-status-pill ${pillClass}">${label}</span>
+            <span class="traffic-road-title" title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</span>
+            <span class="traffic-status-pill">ROAD GEOMETRY</span>
           </div>
           <div class="traffic-road-meta">
-            <span>Flow Speed: ${speed}</span>
-            <span>Tracked: ${r.vehicles.length} units</span>
+            <span>Live speed: unavailable</span>
+            <span>Traffic data: not configured</span>
           </div>
         </article>
       `;
@@ -811,7 +690,8 @@
       state.lastBbox = null;
 
       const pane = document.getElementById('intel-panel-traffic');
-      if (pane) pane.innerHTML = `<div class="intel-empty">Enable Live Traffic to monitor road networks.</div>`;
+      state.lastError = null;
+      if (pane) pane.innerHTML = `<div class="intel-empty">Enable the OpenStreetMap road layer to view road geometry. Live traffic conditions are unavailable.</div>`;
     }
     viewer.scene.requestRender();
   }

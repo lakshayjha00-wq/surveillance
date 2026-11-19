@@ -75,6 +75,16 @@
     return null;
   }
 
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    })[char]);
+  }
+
   function getViewer() {
     return window.viewer;
   }
@@ -316,12 +326,12 @@
           height: 5000,
         },
         label: defaultLabel({
-          text: 'CRITICAL',
+          text: (alert.severity || 'ALERT').toUpperCase(),
           fillColor: Cesium.Color.YELLOW,
           pixelOffset: new Cesium.Cartesian2(0, -24),
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
         }),
-        description: `<b>${alert.severity}</b><br/>${alert.summary || ''}`,
+        description: `<b>${escapeHtml(alert.severity)}</b><br/>${escapeHtml(alert.summary)}`,
       });
 
       alertPulseEntities.push(ent);
@@ -389,17 +399,20 @@
     alerts.forEach((a) => {
       const zoneId = parseZoneIdFromAlert(a);
       const zone = crisisZones.find((z) => z.id === zoneId);
-      const sev = (a.severity || 'INFO').toUpperCase();
+      const rawSeverity = (a.severity || 'INFO').toUpperCase();
+      const sev = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(rawSeverity)
+        ? rawSeverity
+        : 'INFO';
       const ts = a.timestamp
         ? new Date(a.timestamp).toLocaleString()
         : '—';
-      html += `<article class="intel-card intel-card-alert ${sev === 'CRITICAL' ? 'is-critical' : ''}" data-zone-id="${zoneId || ''}" data-lat="${zone?.center.lat ?? ''}" data-lon="${zone?.center.lon ?? ''}">
+      html += `<article class="intel-card intel-card-alert ${sev === 'CRITICAL' ? 'is-critical' : ''}" data-zone-id="${escapeHtml(zoneId || '')}" data-lat="${zone?.center.lat ?? ''}" data-lon="${zone?.center.lon ?? ''}">
         <header class="intel-card-head">
-          <h4>${a.alert_type || 'ALERT'}</h4>
+          <h4>${escapeHtml(a.alert_type || 'ALERT')}</h4>
           <span class="intel-badge critical">${sev}</span>
         </header>
-        <p class="intel-card-summary">${a.summary || '—'}</p>
-        <p class="intel-card-meta">${ts}${zone ? ` · ${zone.name}` : ''}</p>
+        <p class="intel-card-summary">${escapeHtml(a.summary || '—')}</p>
+        <p class="intel-card-meta">${escapeHtml(a.status || 'OPEN')} · REVIEW REQUIRED · Confidence: ${escapeHtml(a.confidence || '—')}${a.confidence_basis ? ` · ${escapeHtml(a.confidence_basis)}` : ''}<br/>${escapeHtml(ts)}${zone ? ` · ${escapeHtml(zone.name)}` : ''}</p>
       </article>`;
     });
 
@@ -478,12 +491,13 @@
   async function loadTacticalAlerts() {
     try {
       const res = await fetch('/api/tactical-alerts');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const alerts = data.alerts || [];
       renderTacticalPanel(alerts);
-      renderTacticalHighlightsOnMap(
-        alerts.filter((a) => (a.severity || '').toUpperCase() === 'CRITICAL')
-      );
+      renderTacticalHighlightsOnMap(alerts.filter((a) =>
+        ['CRITICAL', 'HIGH'].includes((a.severity || '').toUpperCase())
+      ));
     } catch (err) {
       setPanelHtml('tactical', `<div class="intel-empty">Alerts unavailable.</div>`);
     }
@@ -516,7 +530,7 @@
     ws.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data);
-        if (msg.type === 'CRISIS_ZONE_THREAT') {
+        if (msg.type === 'CRISIS_ZONE_THREAT' || msg.type === 'ENTITY_CORRELATION_ALERT') {
           prependLiveAlert(msg);
           loadTacticalAlerts();
         }
@@ -533,20 +547,34 @@
   function prependLiveAlert(msg) {
     const list = document.getElementById('intel-panel-tactical');
     if (!list) return;
+    if (msg.alert_id && Array.from(list.querySelectorAll('[data-alert-id]'))
+      .some((card) => card.dataset.alertId === msg.alert_id)) return;
     const empty = list.querySelector('.intel-empty');
     if (empty) empty.remove();
 
+    const severity = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(
+      (msg.severity || '').toUpperCase()
+    ) ? msg.severity.toUpperCase() : 'INFO';
+    const zoneName = msg.zone?.name || 'Tactical alert';
+    const summary = msg.summary ||
+      `${msg.breach_detail?.total_count || 0} assets inside zone boundary`;
+    const center = msg.zone?.center;
     const card = document.createElement('article');
-    card.className = 'intel-card intel-card-alert is-critical is-live';
-    card.dataset.lat = msg.zone?.center?.lat;
-    card.dataset.lon = msg.zone?.center?.lon;
+    card.className = `intel-card intel-card-alert ${severity === 'CRITICAL' ? 'is-critical' : ''} is-live`;
+    if (msg.alert_id) card.dataset.alertId = msg.alert_id;
+    if (Number.isFinite(Number(center?.lat)) && Number.isFinite(Number(center?.lon))) {
+      card.dataset.lat = center.lat;
+      card.dataset.lon = center.lon;
+    }
     card.innerHTML = `
-      <header class="intel-card-head"><h4>LIVE — ${msg.zone?.name || 'Zone breach'}</h4><span class="intel-badge critical">CRITICAL</span></header>
-      <p class="intel-card-summary">${msg.breach_detail?.total_count || 0} assets inside zone boundary</p>
-      <p class="intel-card-meta">${new Date(msg.timestamp).toLocaleString()}</p>`;
-    card.addEventListener('click', () => {
-      flyToLatLon(Number(card.dataset.lat), Number(card.dataset.lon), 900000);
-    });
+      <header class="intel-card-head"><h4>LIVE — ${escapeHtml(zoneName)}</h4><span class="intel-badge critical">${severity}</span></header>
+      <p class="intel-card-summary">${escapeHtml(summary)}</p>
+      <p class="intel-card-meta">OPEN · REVIEW REQUIRED · Confidence: ${escapeHtml(msg.confidence || '—')}${msg.confidence_basis ? ` · ${escapeHtml(msg.confidence_basis)}` : ''}<br/>${escapeHtml(new Date(msg.timestamp).toLocaleString())}</p>`;
+    if (card.dataset.lat && card.dataset.lon) {
+      card.addEventListener('click', () => {
+        flyToLatLon(Number(card.dataset.lat), Number(card.dataset.lon), 900000);
+      });
+    }
     list.prepend(card);
 
     if (msg.zone?.id) state.zoneAlertActive[msg.zone.id] = true;
