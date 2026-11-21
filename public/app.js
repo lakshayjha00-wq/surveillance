@@ -550,6 +550,7 @@ const flightBillboards = viewer.scene.primitives.add(new Cesium.BillboardCollect
 flightBillboards.show = false;
 
 let flightSocket = null;
+let lastFlightMessageId = 0;
 const flightsById = {};
 const flightMarkers = {};
 const flightHistory = {};
@@ -738,6 +739,10 @@ function connectFlightSocket() {
   flightSocket.onmessage = (event) => {
     try {
       const payload = JSON.parse(event.data);
+      if (Number.isInteger(payload.message_id)) {
+        if (payload.message_id <= lastFlightMessageId) return;
+        lastFlightMessageId = payload.message_id;
+      }
       if (payload.type === 'threat_alert') {
         triggerHudThreatWarning(payload.flight_id, payload.zone);
         return;
